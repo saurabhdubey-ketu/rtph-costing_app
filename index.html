@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ravasco CDS — Commercial Data Sheet &amp; Costing</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Sidebar Navigation -->
+    <aside id="sidebar">
+      <div class="sidebar-brand">
+        <div class="sidebar-brand-name">Ravasco CDS</div>
+        <div class="sidebar-brand-sub">Indus Belts · Costing &amp; Quotation</div>
+      </div>
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-view="dashboard">
+          <span class="nav-icon">⊞</span> Dashboard
+        </button>
+        <button class="nav-item" data-view="customers">
+          <span class="nav-icon">◎</span> Customers
+        </button>
+        <button class="nav-item" data-view="enquiries">
+          <span class="nav-icon">◷</span> Enquiries
+        </button>
+        <button class="nav-item" data-view="quotations">
+          <span class="nav-icon">◈</span> Quotations
+        </button>
+        <button class="nav-item" data-view="masters">
+          <span class="nav-icon">⊛</span> Masters
+        </button>
+        <button class="nav-item" data-view="audit">
+          <span class="nav-icon">≡</span> Audit Log
+        </button>
+      </nav>
+      <div class="sidebar-footer">
+        Prototype v1 · localStorage
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main id="main-content">
+      <div id="view-container">
+        <!-- Views are rendered here by the router -->
+      </div>
+    </main>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-container"></div>
+
+  <script type="module">
+    import { renderDashboard }      from './modules/dashboard.js';
+    import { renderCustomers }      from './modules/customers.js';
+    import { renderEnquiries }      from './modules/enquiries.js';
+    import { renderQuotations }     from './modules/quotations.js';
+    import { renderQuotationForm }  from './modules/quotation_form.js';
+    import { renderMastersAdmin }   from './modules/masters_admin.js';
+
+    // ── Router ─────────────────────────────────────────────────────────────
+    const container = document.getElementById('view-container');
+    let _currentView = 'dashboard';
+    let _currentParams = {};
+
+    function navigate(view, params = {}) {
+      _currentView = view;
+      _currentParams = params;
+
+      // Update sidebar active state
+      document.querySelectorAll('.nav-item').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.view === view);
+      });
+
+      container.innerHTML = '';
+      switch (view) {
+        case 'dashboard':   renderDashboard(container); break;
+        case 'customers':   renderCustomers(container); break;
+        case 'enquiries':   renderEnquiries(container, params); break;
+        case 'quotations':
+          if (params.action === 'new' || params.action === 'edit' || params.action === 'view' || params.action === 'revise') {
+            document.querySelectorAll('.nav-item').forEach(btn => btn.classList.toggle('active', btn.dataset.view === 'quotations'));
+            renderQuotationForm(container, params);
+          } else {
+            renderQuotations(container, params);
+          }
+          break;
+        case 'masters':     renderMastersAdmin(container); break;
+        case 'audit':       renderAuditLog(container); break;
+        default:            container.innerHTML = `<p>Unknown view: ${view}</p>`;
+      }
+    }
+
+    function renderAuditLog(container) {
+      import('./lib/audit.js').then(({ auditRead, auditFilter }) => {
+        let entries = auditRead();
+        container.innerHTML = `
+          <div class="page-header">
+            <h2>Audit Log</h2>
+            <span style="color:var(--color-text-muted);font-size:.85rem">Append-only. Every create/edit/send/revise/override action is recorded.</span>
+          </div>
+          <div class="filter-bar">
+            <select id="audit-entity-filter">
+              <option value="">All entities</option>
+              <option value="customer">customer</option>
+              <option value="enquiry">enquiry</option>
+              <option value="quotation">quotation</option>
+            </select>
+            <select id="audit-action-filter">
+              <option value="">All actions</option>
+              <option value="created">created</option>
+              <option value="edited">edited</option>
+              <option value="sent">sent</option>
+              <option value="revised">revised</option>
+              <option value="override_applied">override_applied</option>
+              <option value="error">error</option>
+            </select>
+          </div>
+          <div id="audit-table"></div>
+        `;
+        const renderTable = () => {
+          const entityF = document.getElementById('audit-entity-filter').value;
+          const actionF = document.getElementById('audit-action-filter').value;
+          const filtered = auditFilter({ entity: entityF || undefined, action: actionF || undefined });
+          const area = document.getElementById('audit-table');
+          if (filtered.length === 0) { area.innerHTML = '<p class="empty-state">No audit entries match the filter.</p>'; return; }
+          area.innerHTML = `
+            <table class="data-table">
+              <thead><tr><th>Timestamp</th><th>Entity</th><th>ID</th><th>Action</th><th>Actor</th></tr></thead>
+              <tbody>
+                ${filtered.map(e => `
+                  <tr>
+                    <td class="mono">${e.ts?.replace('T',' ').slice(0,19)}</td>
+                    <td>${e.entity}</td>
+                    <td class="mono">${e.entity_id}</td>
+                    <td><span class="badge badge-action">${e.action}</span></td>
+                    <td>${e.actor}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          `;
+        };
+        renderTable();
+        document.getElementById('audit-entity-filter').addEventListener('change', renderTable);
+        document.getElementById('audit-action-filter').addEventListener('change', renderTable);
+      });
+    }
+
+    // ── Event listeners ────────────────────────────────────────────────────
+    document.querySelectorAll('.nav-item[data-view]').forEach(btn => {
+      btn.addEventListener('click', () => navigate(btn.dataset.view));
+    });
+
+    window.addEventListener('ravasco:navigate', e => {
+      const { view, ...params } = e.detail;
+      navigate(view, params);
+    });
+
+    window.addEventListener('ravasco:load-form', e => {
+      navigate('quotations', e.detail);
+    });
+
+    // ── Toast system ───────────────────────────────────────────────────────
+    const toastContainer = document.getElementById('toast-container');
+    window.addEventListener('ravasco:toast', e => {
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      toast.textContent = e.detail.msg;
+      toastContainer.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    });
+
+    // ── Boot ───────────────────────────────────────────────────────────────
+    navigate('dashboard');
+  </script>
+</body>
+</html>

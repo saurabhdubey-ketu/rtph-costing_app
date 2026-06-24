@@ -1,0 +1,15 @@
+# Dev / verification scripts
+check.mjs
+verify_*.mjs
+verify_*.txt
+
+# Dev mockups & scratch files
+quotation_form_v2_mockup.html
+PROGRESS.md
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+*.swp
