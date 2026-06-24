@@ -4,10 +4,10 @@
 // applies_to: 'reel' = a reel type; 'packing' = a packing/crating type; 'both' = either context.
 
 export const REEL_PACKING_MASTER = Object.freeze([
-  { id: 'RPK-HDPE',    code: 'HDPE Packing',    name: 'HDPE Packing',    packing_cost_per_meter: 4.00,   applies_to: 'packing', active: true },
+  { id: 'RPK-HDPE',    code: 'HDPE Packing',    name: 'HDPE Packing',    packing_cost_per_meter: 90.00,  applies_to: 'packing', active: true },
   { id: 'RPK-WOODEN',  code: 'Wooden Crate',    name: 'Wooden Crate',    packing_cost_per_meter: 12.00,  applies_to: 'packing', active: true },
   { id: 'RPK-STEEL',   code: 'Steel Crate',     name: 'Steel Crate',     packing_cost_per_meter: 200.00, applies_to: 'packing', active: true },
-  { id: 'RPK-CIRCULAR',code: 'Circular Reel',   name: 'Circular Reel',   packing_cost_per_meter: 4.00,   applies_to: 'reel',    active: true },
+  { id: 'RPK-TWIN',     code: 'Twin Roll',      name: 'Twin Roll',       packing_cost_per_meter: 4.00,   applies_to: 'reel',    active: true },
   { id: 'RPK-CASSETTE',code: 'Cassette Reel',   name: 'Cassette Reel',   packing_cost_per_meter: 6.00,   applies_to: 'reel',    active: true },
   { id: 'RPK-SINGLE',  code: 'Single Roll',     name: 'Single Roll',     packing_cost_per_meter: 3.00,   applies_to: 'reel',    active: true },
 ]);

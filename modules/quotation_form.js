@@ -12,6 +12,7 @@ import { runEngine }                             from '../engine/engine.js';
 import { PRODUCT_MASTER }                            from '../masters/product_master.js';
 import { BELT_TYPE_MASTER }                          from '../masters/belt_type_master.js';
 import { FABRIC_TYPE_MASTER }                        from '../masters/fabric_type_master.js';
+import { GRADE_MASTER }                             from '../masters/grade_master.js';
 import { FABRIC_STRENGTH_MASTER }                    from '../masters/fabric_strength_master.js';
 import { FABRIC_RATE_MASTER }                        from '../masters/fabric_rate_master.js';
 import { FABRIC_SUPPLIER_MASTER }                   from '../masters/fabric_supplier_master.js';
@@ -244,8 +245,16 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
               <div class="cf-input"><select name="fabric_type" ${ro}></select></div>
             </div>
             <div class="cf-row">
-              <div class="cf-label">Breaking Strength</div>
+              <div class="cf-label cf-label-cust">Customer Fabric Type</div>
+              <div class="cf-input"><select name="customer_fabric_type"></select></div>
+            </div>
+            <div class="cf-row">
+              <div class="cf-label">Fabric Strength</div>
               <div class="cf-input"><select name="fabric_strength" ${ro}></select></div>
+            </div>
+            <div class="cf-row">
+              <div class="cf-label cf-label-cust">Customer Fabric Strength</div>
+              <div class="cf-input"><select name="customer_fabric_strength"></select></div>
             </div>
             <div class="cf-row">
               <div class="cf-label">No. of Ply</div>
@@ -356,6 +365,10 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
                 </div>
               </div>
             </div>
+            <div class="cf-row">
+              <div class="cf-label cf-label-cust">Customer Grade</div>
+              <div class="cf-input"><select name="customer_grade"></select></div>
+            </div>
             <div class="qf-cvr-tabs">
               <button class="qf-cvr-tab on" data-cvrtab="top"  type="button">Top Cover</button>
               <button class="qf-cvr-tab"    data-cvrtab="bot"  type="button">Bottom Cover</button>
@@ -428,6 +441,10 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
             </div>
             <div id="breaker-top-sub" class="cf-sub-block" style="display:${line.breaker_top_id ? 'block' : 'none'}">
               <div class="cf-row cf-indented">
+                <div class="cf-label">Breaker Fabric</div>
+                <div class="cf-input"><select name="breaker_top_id" ${ro}></select></div>
+              </div>
+              <div class="cf-row cf-indented">
                 <div class="cf-label">No of Ply</div>
                 <div class="cf-input">
                   <input type="number" name="breaker_top_ply" id="brk-top-ply-input" min="1" max="6" step="1"
@@ -447,13 +464,6 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
                 <div class="cf-label">Skim Type</div>
                 <div class="cf-input"><select name="breaker_top_skim_compound_id" ${ro}></select></div>
               </div>
-              <div class="cf-row cf-indented">
-                <div class="cf-label">Skim Thickness <span class="cf-unit">mm</span></div>
-                <div class="cf-input">
-                  <input type="number" name="breaker_top_skim_thickness_mm" step="0.1" min="0.1"
-                         value="${line.breaker_top_skim_thickness_mm ?? 0.6}" ${ro}>
-                </div>
-              </div>
             </div>
             <!-- BOB -->
             <div class="cf-row">
@@ -467,6 +477,10 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
               </div>
             </div>
             <div id="breaker-bot-sub" class="cf-sub-block" style="display:${line.breaker_bot_id ? 'block' : 'none'}">
+              <div class="cf-row cf-indented">
+                <div class="cf-label">Breaker Fabric</div>
+                <div class="cf-input"><select name="breaker_bot_id" ${ro}></select></div>
+              </div>
               <div class="cf-row cf-indented">
                 <div class="cf-label">No of Ply</div>
                 <div class="cf-input">
@@ -486,13 +500,6 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
               <div class="cf-row cf-indented">
                 <div class="cf-label">Skim Type</div>
                 <div class="cf-input"><select name="breaker_bot_skim_compound_id" ${ro}></select></div>
-              </div>
-              <div class="cf-row cf-indented">
-                <div class="cf-label">Skim Thickness <span class="cf-unit">mm</span></div>
-                <div class="cf-input">
-                  <input type="number" name="breaker_bot_skim_thickness_mm" step="0.1" min="0.1"
-                         value="${line.breaker_bot_skim_thickness_mm ?? 0.6}" ${ro}>
-                </div>
               </div>
             </div>
 
@@ -693,48 +700,6 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
               </div>
             </div>
 
-            <div class="cf-divider" style="margin:.75rem 0"></div>
-
-            <div id="post-order-section">
-              <div class="cf-section-title cf-collapsible-title" id="post-order-toggle" style="cursor:pointer">
-                <span>Post-Order Tracking</span>
-                <span class="cf-toggle-icon" id="post-order-caret">▶</span>
-              </div>
-              <div id="post-order-body" style="display:none">
-                <div class="cf-row">
-                  <div class="cf-label">Order Rate <span class="cf-unit">₹/m</span></div>
-                  <div class="cf-input"><input type="number" name="po_order_rate_per_m" step="0.01" min="0" value="${escHtml(String(line.po_order_rate_per_m ?? ''))}" placeholder="Actual rate received" ${ro}></div>
-                </div>
-                <div class="cf-row">
-                  <div class="cf-label">PO Status</div>
-                  <div class="cf-input">
-                    <select name="po_status" ${ro}>
-                      <option value="">— not set —</option>
-                      <option value="pending"  ${line.po_status === 'pending'  ? 'selected' : ''}>Pending</option>
-                      <option value="received" ${line.po_status === 'received' ? 'selected' : ''}>Received</option>
-                      <option value="partial"  ${line.po_status === 'partial'  ? 'selected' : ''}>Partial</option>
-                    </select>
-                  </div>
-                </div>
-                <div class="cf-row">
-                  <div class="cf-label">PO Rate <span class="cf-unit">₹/m</span></div>
-                  <div class="cf-input"><input type="number" name="po_rate" step="0.01" min="0" value="${escHtml(String(line.po_rate ?? ''))}" placeholder="PO rate" ${ro}></div>
-                </div>
-                <div class="cf-row">
-                  <div class="cf-label">Agent Name</div>
-                  <div class="cf-input"><input type="text" name="po_agent" value="${escHtml(line.po_agent ?? '')}" placeholder="Agent or channel" ${ro}></div>
-                </div>
-                <div class="cf-row">
-                  <div class="cf-label">Actual GP%</div>
-                  <div class="cf-input">
-                    <div class="cf-auto-wrap">
-                      <input type="text" id="po-actual-gp-display" readonly disabled placeholder="Auto from Order Rate">
-                      <span class="cf-auto-tag">AUTO</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
           </div></div>
         </div>
 
@@ -906,21 +871,21 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
         <div class="qf-bd-panel" id="tab-blocks">
           <div id="cc-breakdown-panel">
 
-            <!-- Belt Weight -->
+            <!-- A — Belt weight calculation -->
             <div class="qf-calc-group">
-              <div class="qf-calc-group-hd">Belt Weight Calculation</div>
+              <div class="qf-calc-group-hd">A — Belt weight calculation</div>
               <div class="qf-calc-chips">
                 <div class="qf-calc-chip"><span class="qf-calc-lbl">Width</span><span class="qf-calc-val" id="cc-width">—</span></div>
-                <div class="qf-calc-chip"><span class="qf-calc-lbl">Length (eff.)</span><span class="qf-calc-val" id="cc-length">—</span></div>
+                <div class="qf-calc-chip"><span class="qf-calc-lbl">Length</span><span class="qf-calc-val" id="cc-length">—</span></div>
                 <div class="qf-calc-chip qf-calc-chip-wide"><span class="qf-calc-lbl">Calculated Belt Weight / m</span><span class="qf-calc-val" id="cc-belt-wt">—</span></div>
               </div>
             </div>
 
-            <!-- Fabric -->
+            <!-- B — Fabric (carcass) calculations -->
             <div class="qf-calc-group">
-              <div class="qf-calc-group-hd">Fabric</div>
+              <div class="qf-calc-group-hd">B — Fabric (carcass) calculations</div>
               <div class="qf-calc-chips">
-                <div class="qf-calc-chip qf-calc-chip-wide"><span class="qf-calc-lbl">Length per Ply (L_eff × plies)</span><span class="qf-calc-val" id="cc-len-per-ply">—</span></div>
+                <div class="qf-calc-chip qf-calc-chip-wide"><span class="qf-calc-lbl">Length (L_eff)</span><span class="qf-calc-val" id="cc-len-per-ply">—</span></div>
                 <div class="qf-calc-chip"><span class="qf-calc-lbl">GSM</span><span class="qf-calc-val" id="cc-fab-gsm">—</span></div>
                 <div class="qf-calc-chip"><span class="qf-calc-lbl">Price / kg</span><span class="qf-calc-val" id="cc-fab-price">—</span></div>
                 <div class="qf-calc-chip"><span class="qf-calc-lbl">Fabric Weight</span><span class="qf-calc-val" id="cc-fab-weight">—</span></div>
@@ -928,10 +893,11 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
               </div>
             </div>
 
-            <!-- BOT/BOB -->
+            <!-- C — BOT / BOB calculations -->
             <div class="qf-calc-group" id="cc-brk-group" style="display:none">
-              <div class="qf-calc-group-hd">BOT / BOB Calculations</div>
+              <div class="qf-calc-group-hd">C — BOT / BOB calculations</div>
               <div class="qf-calc-chips">
+                <div class="qf-calc-chip qf-calc-chip-wide"><span class="qf-calc-lbl">Length (L_eff)</span><span class="qf-calc-val" id="cc-brk-length">—</span></div>
                 <div class="qf-calc-chip" id="cc-bot-chip" style="display:none"><span class="qf-calc-lbl">BOT GSM</span><span class="qf-calc-val" id="cc-bot-gsm">—</span></div>
                 <div class="qf-calc-chip" id="cc-bot-price-chip" style="display:none"><span class="qf-calc-lbl">BOT Price / kg</span><span class="qf-calc-val" id="cc-bot-price">—</span></div>
                 <div class="qf-calc-chip" id="cc-bot-wt-chip" style="display:none"><span class="qf-calc-lbl">BOT Fabric Wt</span><span class="qf-calc-val" id="cc-bot-fab-wt">—</span></div>
@@ -941,24 +907,24 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
               </div>
             </div>
 
-            <!-- Compound -->
+            <!-- D — Compound (rubber) calculations -->
             <div class="qf-calc-group">
-              <div class="qf-calc-group-hd">Compound Belt Calculations</div>
+              <div class="qf-calc-group-hd">D — Compound (rubber) calculations</div>
               <div class="qf-calc-chips">
                 <div class="qf-calc-chip"><span class="qf-calc-lbl">Compound Weight</span><span class="qf-calc-val" id="cc-cmpd-wt">—</span></div>
-                <div class="qf-calc-chip"><span class="qf-calc-lbl">Type 1 (Top) Wt</span><span class="qf-calc-val" id="cc-top-cover-wt">—</span></div>
-                <div class="qf-calc-chip"><span class="qf-calc-lbl">Type 2 (Bot) Wt</span><span class="qf-calc-val" id="cc-bot-cover-wt">—</span></div>
+                <div class="qf-calc-chip"><span class="qf-calc-lbl">Cover Weight</span><span class="qf-calc-val" id="cc-total-cover-wt">—</span></div>
+                <div class="qf-calc-chip"><span class="qf-calc-lbl">Skim Weight</span><span class="qf-calc-val" id="cc-skim-wt">—</span></div>
                 <div class="qf-calc-chip"><span class="qf-calc-lbl">Cost of Cover</span><span class="qf-calc-val" id="cc-cover-cost">—</span></div>
                 <div class="qf-calc-chip"><span class="qf-calc-lbl">Cost of Skim</span><span class="qf-calc-val" id="cc-skim-cost-chip">—</span></div>
                 <div class="qf-calc-chip qf-calc-chip-wide"><span class="qf-calc-lbl">Total Compound Cost</span><span class="qf-calc-val" id="cc-total-cmpd-cost">—</span></div>
               </div>
             </div>
 
-            <!-- Total -->
+            <!-- E — Total belt calculations -->
             <div class="qf-calc-group qf-calc-group-total">
-              <div class="qf-calc-group-hd">Total Belt Calculations</div>
+              <div class="qf-calc-group-hd">E — Total belt calculations</div>
               <div class="qf-calc-chips">
-                <div class="qf-calc-chip qf-calc-chip-wide"><span class="qf-calc-lbl">Fabric + BOT+BOB Cost</span><span class="qf-calc-val" id="cc-fab-brk-cost">—</span></div>
+                <div class="qf-calc-chip qf-calc-chip-wide"><span class="qf-calc-lbl">Fabric + BOT + BOB Cost / m</span><span class="qf-calc-val" id="cc-fab-brk-cost">—</span></div>
                 <div class="qf-calc-chip qf-calc-chip-wide qf-calc-chip-hero"><span class="qf-calc-lbl">Minimum Quoting Price / m</span><span class="qf-calc-val" id="cc-min-price">—</span></div>
               </div>
             </div>
@@ -1043,8 +1009,11 @@ function populateAllDropdowns(container, line) {
   pop(container, '[name="fabric_make"]', FABRIC_SUPPLIER_MASTER, 'code', 'name', line.fabric_make);
 
   pop(container, '[name="fabric_type"]', FABRIC_TYPE_MASTER.filter(r => r.active), 'code', 'name', line.fabric_type);
+  pop(container, '[name="customer_fabric_type"]', FABRIC_TYPE_MASTER.filter(r => r.active), 'code', 'name', line.customer_fabric_type);
 
-  populateFabricStrengthDropdowns(container, line.fabric_type, line.fabric_strength, line.plies);
+  pop(container, '[name="customer_grade"]', GRADE_MASTER.filter(r => r.active), 'code', 'name', line.customer_grade);
+
+  populateFabricStrengthDropdowns(container, line.fabric_type, line.fabric_strength, line.plies, line.customer_fabric_strength);
 
   pop(container, '[name="top_cover_thickness_mm"]',    COVER_THICKNESS_MASTER.filter(r => r.active), 'thickness_mm', 'display', line.top_cover_thickness_mm);
   pop(container, '[name="bottom_cover_thickness_mm"]', COVER_THICKNESS_MASTER.filter(r => r.active), 'thickness_mm', 'display', line.bottom_cover_thickness_mm);
@@ -1069,6 +1038,11 @@ function populateAllDropdowns(container, line) {
   pop(container, '[name="skim_compound_id"]',             skimCmpds, 'id', 'name', line.skim_compound_id);
   pop(container, '[name="breaker_top_skim_compound_id"]', skimCmpds, 'id', 'name', line.breaker_top_skim_compound_id);
   pop(container, '[name="breaker_bot_skim_compound_id"]', skimCmpds, 'id', 'name', line.breaker_bot_skim_compound_id);
+
+  // Breaker fabric selects
+  const activeBrk = _BREAKER.filter(r => r.active !== false);
+  pop(container, '[name="breaker_top_id"]', activeBrk, 'id', 'name', line.breaker_top_id);
+  pop(container, '[name="breaker_bot_id"]', activeBrk, 'id', 'name', line.breaker_bot_id);
 
   // Edge type — sync hidden input + toggle buttons
   const _edgeVal = line.edge_id ?? 'EDGE-CE';
@@ -1104,7 +1078,7 @@ function populateBeltTypes(container, productTypeId, selectedId) {
   pop(container, '[name="belt_type_id"]', types, 'id', 'name', selectedId);
 }
 
-function populateFabricStrengthDropdowns(container, fabricType, selStrength, selPlies) {
+function populateFabricStrengthDropdowns(container, fabricType, selStrength, selPlies, selCustStrength) {
   const rows = fabricType
     ? FABRIC_STRENGTH_MASTER.filter(r => r.fabric_type === fabricType && r.active)
     : FABRIC_STRENGTH_MASTER.filter(r => r.active);
@@ -1129,6 +1103,17 @@ function populateFabricStrengthDropdowns(container, fabricType, selStrength, sel
     if (p === selPlies) o.selected = true;
     pEl.appendChild(o);
   });
+
+  const csEl = container.querySelector('[name="customer_fabric_strength"]');
+  if (csEl) {
+    csEl.innerHTML = '<option value="">— select —</option>';
+    strengths.forEach(s => {
+      const o = document.createElement('option');
+      o.value = s; o.textContent = s + ' N/mm';
+      if (s === selCustStrength) o.selected = true;
+      csEl.appendChild(o);
+    });
+  }
 }
 
 // Utility wrapper around populateDropdown pattern
@@ -1232,11 +1217,13 @@ function updateDerivedDisplays(container, _line) {
     frtInput.value = freightRow.rate_per_kg.toFixed(2);
   }
 
-  // Breaker ply defaults — BOT uses BRK-TOP, BOB uses BRK-BOB
-  const botEnabled = container.querySelector('[name="breaker_top_enabled"]')?.value === 'yes';
-  const bobEnabled = container.querySelector('[name="breaker_bot_enabled"]')?.value === 'yes';
-  const brkTop = botEnabled ? _BREAKER.find(r => r.id === 'BRK-TOP') : null;
-  const brkBot = bobEnabled ? _BREAKER.find(r => r.id === 'BRK-BOB') : null;
+  // Breaker ply defaults — read from the Breaker Fabric select
+  const botEnabled   = container.querySelector('[name="breaker_top_enabled"]')?.value === 'yes';
+  const bobEnabled   = container.querySelector('[name="breaker_bot_enabled"]')?.value === 'yes';
+  const brkTopSelId  = container.querySelector('[name="breaker_top_id"]')?.value;
+  const brkBotSelId  = container.querySelector('[name="breaker_bot_id"]')?.value;
+  const brkTop = botEnabled ? _BREAKER.find(r => r.id === (brkTopSelId || 'BRK-TOP')) : null;
+  const brkBot = bobEnabled ? _BREAKER.find(r => r.id === (brkBotSelId || 'BRK-BOB')) : null;
   const pTopEl = container.querySelector('#brk-top-ply-input');
   const pBotEl = container.querySelector('#brk-bot-ply-input');
   if (pTopEl && brkTop?.no_of_ply_default != null && !pTopEl.value) pTopEl.value = brkTop.no_of_ply_default;
@@ -1522,8 +1509,8 @@ function collectLine(container) {
 
   const _BREAKER  = getLiveBreakers();
   const _PACKING  = getLivePacking();
-  const brkTopId  = container.querySelector('[name="breaker_top_enabled"]')?.value === 'yes' ? 'BRK-TOP' : null;
-  const brkBotId  = container.querySelector('[name="breaker_bot_enabled"]')?.value === 'yes' ? 'BRK-BOB' : null;
+  const brkTopId  = container.querySelector('[name="breaker_top_enabled"]')?.value === 'yes' ? (f('breaker_top_id') || null) : null;
+  const brkBotId  = container.querySelector('[name="breaker_bot_enabled"]')?.value === 'yes' ? (f('breaker_bot_id') || null) : null;
   const brkTopRow = brkTopId ? _BREAKER.find(r => r.id === brkTopId) : null;
   const brkBotRow = brkBotId ? _BREAKER.find(r => r.id === brkBotId) : null;
 
@@ -1552,12 +1539,10 @@ function collectLine(container) {
     breaker_top_ply:              brkTopId ? (fNum('breaker_top_ply') ?? brkTopRow?.no_of_ply_default ?? null) : null,
     ovr_breaker_top_gsm:          brkTopId ? fNum('ovr_breaker_top_gsm') : null,
     breaker_top_skim_compound_id: brkTopId ? f('breaker_top_skim_compound_id') : null,
-    breaker_top_skim_thickness_mm: brkTopId ? fNum('breaker_top_skim_thickness_mm') : null,
     breaker_bot_id:               brkBotId,
     breaker_bot_ply:              brkBotId ? (fNum('breaker_bot_ply') ?? brkBotRow?.no_of_ply_default ?? null) : null,
     ovr_breaker_bot_gsm:          brkBotId ? fNum('ovr_breaker_bot_gsm') : null,
     breaker_bot_skim_compound_id: brkBotId ? f('breaker_bot_skim_compound_id') : null,
-    breaker_bot_skim_thickness_mm: brkBotId ? fNum('breaker_bot_skim_thickness_mm') : null,
     edge_id:                      f('edge_id'),
     length_per_roll_m:            fNum('length_per_roll_m'),
     no_of_rolls:                  fNum('no_of_rolls'),
@@ -1586,11 +1571,10 @@ function collectLine(container) {
     ovr_expenses_per_kg:          fNum('ovr_expenses_per_kg'),
     customer_carcass_thickness_mm: fNum('customer_carcass_thickness_mm'),
     customer_tbt_mm:               fNum('customer_tbt_mm'),
+    customer_fabric_type:          f('customer_fabric_type') || null,
+    customer_fabric_strength:      fNum('customer_fabric_strength'),
+    customer_grade:                f('customer_grade') || null,
     // Post-order tracking §8.12
-    po_order_rate_per_m:          fNum('po_order_rate_per_m'),
-    po_status:                    f('po_status') || null,
-    po_rate:                      fNum('po_rate'),
-    po_agent:                     f('po_agent') || null,
   };
 }
 
@@ -1798,15 +1782,6 @@ function renderResults(container, result) {
   setText(container, '#r-rmc-usd',  p.rmc_usd  != null ? `$${p.rmc_usd.toFixed(2)} / m`  : 'N/A — set exchange rate');
   setText(container, '#r-cd-usd',   p.quotation_usd != null ? `$${p.quotation_usd.toFixed(2)} / m` : 'N/A — set exchange rate');
 
-  // Post-order actual GP% display
-  const poRate = Number(container.querySelector('[name="po_order_rate_per_m"]')?.value ?? 0);
-  const poGpEl = container.querySelector('#po-actual-gp-display');
-  if (poGpEl && poRate > 0 && p.rmc_per_meter > 0) {
-    const actGp = ((poRate - p.rmc_per_meter) / p.rmc_per_meter * 100).toFixed(1);
-    poGpEl.value = `${actGp}%`;
-  } else if (poGpEl) {
-    poGpEl.value = '';
-  }
 
   // Calculation breakdown chips (Calc tab)
   const ccPanel = container.querySelector('#cc-breakdown-panel');
@@ -1815,14 +1790,16 @@ function renderResults(container, result) {
     setText(container, '#cc-width',    d.effective_width_m  != null ? `${(d.effective_width_m * 1000).toFixed(1)} mm` : '—');
     setText(container, '#cc-length',   d.effective_length_m != null ? d.effective_length_m.toFixed(3) + ' m' : '—');
     setText(container, '#cc-belt-wt',  d.weight_per_meter_kg != null ? formatKg(d.weight_per_meter_kg) + ' / m' : '—');
-    setText(container, '#cc-len-per-ply', d.per_ply_length_m != null ? d.per_ply_length_m.toFixed(3) + ' m' : '—');
+    setText(container, '#cc-len-per-ply', d.effective_length_m != null ? d.effective_length_m.toFixed(3) + ' m' : '—');
     setText(container, '#cc-fab-gsm',  s.fabric?.gsm != null ? s.fabric.gsm.toFixed(1) + ' g/m²' : '—');
     setText(container, '#cc-fab-price', s.fabric?.price_per_kg != null ? formatRupees(s.fabric.price_per_kg) + ' / kg' : '—');
     setText(container, '#cc-fab-weight', d.fabric_weight_kg != null ? formatKg(d.fabric_weight_kg) : '—');
     setText(container, '#cc-fab-cost',  c.fabric_cost  != null ? formatRupees(c.fabric_cost)  : '—');
+    setText(container, '#cc-brk-length', d.effective_length_m != null ? d.effective_length_m.toFixed(3) + ' m' : '—');
     setText(container, '#cc-cmpd-wt',   d.compound_weight_kg != null ? formatKg(d.compound_weight_kg)  : '—');
-    setText(container, '#cc-top-cover-wt', d.top_cover_weight_kg    != null ? formatKg(d.top_cover_weight_kg)    : '—');
-    setText(container, '#cc-bot-cover-wt', d.bottom_cover_weight_kg != null ? formatKg(d.bottom_cover_weight_kg) : '—');
+    const totalCoverWt = (d.top_cover_weight_kg ?? 0) + (d.bottom_cover_weight_kg ?? 0);
+    setText(container, '#cc-total-cover-wt', totalCoverWt > 0 ? formatKg(totalCoverWt) : '—');
+    setText(container, '#cc-skim-wt',    d.skim_weight_kg != null ? formatKg(d.skim_weight_kg) : '—');
     setText(container, '#cc-cover-cost', c.top_cover_cost != null && c.bottom_cover_cost != null ? formatRupees(c.top_cover_cost + c.bottom_cover_cost) : '—');
     setText(container, '#cc-skim-cost-chip', c.skim_cost != null ? formatRupees(c.skim_cost) : '—');
     setText(container, '#cc-total-cmpd-cost', c.total_compound_cost != null ? formatRupees(c.total_compound_cost) : '—');
@@ -1884,10 +1861,6 @@ function renderDetailedFields(container, result) {
   const cct         = fabricRow?.nominal_carcass_thickness_mm;
   const tbt         = cct != null ? cct + (i.top_cover_thickness_mm || 0) + (i.bottom_cover_thickness_mm || 0) : null;
   const combinedRating = (i.fabric_type && i.fabric_strength && i.plies) ? `${i.fabric_type}-${i.fabric_strength}/${i.plies}` : '—';
-  const orderRate   = i.po_order_rate_per_m != null ? formatRupees(i.po_order_rate_per_m) + ' / m' : '—';
-  const actualGp    = (i.po_order_rate_per_m != null && i.po_order_rate_per_m > 0 && p.rmc_per_meter > 0)
-    ? `${(((i.po_order_rate_per_m - p.rmc_per_meter) / p.rmc_per_meter) * 100).toFixed(1)}%`
-    : '—';
   const widthMm = Number(i.width_mm ?? 0);
   const compoundFactor = (c.material_cost > 0 && c.total_compound_cost != null)
     ? `${((c.total_compound_cost / c.material_cost) * 100).toFixed(1)}%`
@@ -2024,12 +1997,6 @@ function renderDetailedFields(container, result) {
     row('Per MM Price (VD)', p.per_mm_vd_price != null ? formatRupees(p.per_mm_vd_price) + ' / m / mm' : '—'),
     row('Freight Charges (Old Pricing)', '₹0 — legacy reference'),
 
-    hdr('Post-Order'),
-    row('Order Rate / Meter', orderRate),
-    row('Rate @ Order Procured (PO Rate)', i.po_rate != null ? formatRupees(i.po_rate) + ' / m' : '—'),
-    row('Actual GP % on RMC', actualGp),
-    row('PO Status', i.po_status || '—'),
-    row('Agent / Channel', i.po_agent || '—'),
   ];
 
   target.innerHTML = sections.join('');
@@ -2161,7 +2128,7 @@ function setupEvents(container, quotation, isRevise) {
 
   // Fabric type → repopulate strength/ply + refresh derived fields
   container.querySelector('[name="fabric_type"]')?.addEventListener('change', e => {
-    populateFabricStrengthDropdowns(container, e.target.value, null, null);
+    populateFabricStrengthDropdowns(container, e.target.value, null, null, null);
     updateBeltRating(container);
     updateDerivedDisplays(container, null);
   });
@@ -2409,7 +2376,9 @@ function setupEvents(container, quotation, isRevise) {
     window.dispatchEvent(new CustomEvent('ravasco:navigate', { detail: { view: 'quotations' } }));
   });
   container.querySelector('#btn-pdf')?.addEventListener('click', () => {
-    openPrintWindow(_currentQuotation, _currentResult);
+    if (!_currentResult) { showToast('No calculation result found — open the quotation and recalculate first.'); return; }
+    const ok = openPrintWindow(_currentQuotation, _currentResult);
+    if (!ok) showToast('PDF blocked by browser — allow pop-ups for this site, then try again.');
   });
   container.querySelector('#btn-revise-btn')?.addEventListener('click', () => {
     window.dispatchEvent(new CustomEvent('ravasco:navigate', { detail: { view: 'quotations', action: 'revise', id: _currentQuotation?.id } }));

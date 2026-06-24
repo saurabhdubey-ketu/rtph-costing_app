@@ -64,9 +64,30 @@ export function runEngine(line, overrides = {}) {
   );
 
   // Fabric GSM and price from FABRIC_RATE_MASTER (grades first, type_defaults as fallback)
-  const fabricRateGrade = FABRIC_RATE_MASTER.grades.find(
-    r => r.fabric_type === line.fabric_type && r.per_ply_rating === fabricRow.per_ply_rating,
+  // Uses nearest-match on per_ply_rating so fractional ratings like EE-630/4 (157.5 kN/m)
+  // resolve to the closest band (EE-160) instead of silently zeroing out fabric weight.
+  const _fabricRateCandidates = FABRIC_RATE_MASTER.grades.filter(
+    r => r.fabric_type === line.fabric_type && r.active !== false,
   );
+  const _fabricRateExact = _fabricRateCandidates.find(
+    r => r.per_ply_rating === fabricRow.per_ply_rating,
+  );
+  const fabricRateGrade = _fabricRateExact ?? (
+    _fabricRateCandidates.length > 0
+      ? _fabricRateCandidates.reduce((best, r) =>
+          Math.abs(r.per_ply_rating - fabricRow.per_ply_rating) <
+          Math.abs(best.per_ply_rating - fabricRow.per_ply_rating) ? r : best
+        )
+      : null
+  );
+  if (!_fabricRateExact && fabricRateGrade) {
+    warnings.push(
+      `Fabric rate: no exact match for ${line.fabric_type} ${fabricRow.per_ply_rating} kN/m/ply — ` +
+      `using nearest band ${line.fabric_type}-${fabricRateGrade.per_ply_rating} (GSM ${fabricRateGrade.gsm}). ` +
+      `Add exact entry to fabric_rate_master or enter GSM override to suppress this warning.`
+    );
+  }
+
   const fabricDefault = FABRIC_RATE_MASTER.type_defaults.find(r => r.fabric_type === line.fabric_type);
   const fabric_gsm_master   = fabricRateGrade?.gsm ?? null;
   const fabric_price_per_kg = fabricRateGrade?.price_per_kg ?? fabricDefault?.default_rate_per_kg ?? 0;
@@ -108,7 +129,7 @@ export function runEngine(line, overrides = {}) {
   const rate_skim      = overrides.skim_rate            ?? skimCmpd.price_per_kg;
   const eff_fabric_price = overrides.fabric_price      ?? fabric_price_per_kg;
   const eff_fabric_gsm = (overrides.fabric_gsm > 0) ? overrides.fabric_gsm : fabric_gsm_master;
-  const extra_cop      = overrides.expenses_per_kg     ?? 0;
+  const extra_cop      = overrides.expenses_per_kg     ?? 20;
   const eff_carcass_mm = overrides.carcass_thickness_mm ?? fabricRow.nominal_carcass_thickness_mm;
 
   // ── 2. Effective width and length ──────────────────────────────────────────
@@ -160,7 +181,7 @@ export function runEngine(line, overrides = {}) {
       } else {
         warnings.push(`Breaker "${brkTopRow.code}" has no GSM — breaker weight set to 0. Add GSM to breaker_master or enter manually.`);
       }
-      brk_top_skim_wt = breakerSkimWeight(w_eff, line.breaker_top_skim_thickness_mm ?? 0.6, brkTopSkimCmpd.sg, l_eff);
+      brk_top_skim_wt = breakerSkimWeight(w_eff, brkTopRow.skim_thickness_mm, brkTopSkimCmpd.sg, l_eff);
     }
     if (line.breaker_bot_id) {
       brkBotRow       = mustFind(BREAKER_MASTER, r => r.id === line.breaker_bot_id, `breaker_bot_id=${line.breaker_bot_id}`);
@@ -174,7 +195,7 @@ export function runEngine(line, overrides = {}) {
       } else {
         warnings.push(`Breaker "${brkBotRow.code}" has no GSM — breaker weight set to 0. Add GSM to breaker_master or enter manually.`);
       }
-      brk_bot_skim_wt = breakerSkimWeight(w_eff, line.breaker_bot_skim_thickness_mm ?? 3, brkBotSkimCmpd.sg, l_eff);
+      brk_bot_skim_wt = breakerSkimWeight(w_eff, brkBotRow.skim_thickness_mm, brkBotSkimCmpd.sg, l_eff);
     }
   }
 
