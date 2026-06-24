@@ -63,13 +63,13 @@ All reference data (rates, SG values, wastage rules) lives in `masters/*.js`. Ea
      has_bottom_cover: true,
      has_fabric: true,
      has_skim: true,
-     has_breaker: false,   // set true if it uses breakers
+     has_breaker: false,
      has_cleat: false,
      has_sidewall: false,
      has_blinker: false,
      has_solution: false,
      has_hardener: false,
-     length_rule: 'open_end',        // or 'endless'
+     length_rule: 'open_end',
      open_end_wastage_pct: 0.03,
      splice_allowance_m: 3,
      cost_of_production_rate_per_kg: 22,
