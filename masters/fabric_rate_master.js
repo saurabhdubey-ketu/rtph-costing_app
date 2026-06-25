@@ -69,6 +69,7 @@ export const FABRIC_RATE_MASTER = Object.freeze({
     { id: 'FRM-EE-160',  code: 'EE-160',  fabric_type: 'EE', per_ply_rating: 160,  gsm:  570, thickness_mm: 0.75, price_per_kg: 210.00, active: true },
     { id: 'FRM-EE-200',  code: 'EE-200',  fabric_type: 'EE', per_ply_rating: 200,  gsm:  720, thickness_mm: 0.95, price_per_kg: 210.00, active: true },
     { id: 'FRM-EE-250',  code: 'EE-250',  fabric_type: 'EE', per_ply_rating: 250,  gsm:  850, thickness_mm: 1.15, price_per_kg: 210.00, active: true },
+    { id: 'FRM-EE-280',  code: 'EE-280',  fabric_type: 'EE', per_ply_rating: 280,  gsm:  920, thickness_mm: 1.24, price_per_kg: 210.00, active: true },
     { id: 'FRM-EE-315',  code: 'EE-315',  fabric_type: 'EE', per_ply_rating: 315,  gsm: 1000, thickness_mm: 1.35, price_per_kg: 210.00, active: true },
     { id: 'FRM-EE-350',  code: 'EE-350',  fabric_type: 'EE', per_ply_rating: 350,  gsm: 1170, thickness_mm: 1.60, price_per_kg: 210.00, active: true },
     { id: 'FRM-EE-400',  code: 'EE-400',  fabric_type: 'EE', per_ply_rating: 400,  gsm: 1250, thickness_mm: 1.75, price_per_kg: 210.00, active: true },

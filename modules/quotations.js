@@ -47,7 +47,7 @@ function renderQuotationTable() {
   const statusFilter = document.getElementById('qtn-status-filter')?.value ?? '';
 
   const customers = Object.fromEntries(getAllCustomers(true).map(c => [c.id, c]));
-  let quotations = storageGetAll('quotation.').sort((a, b) => b.created_at.localeCompare(a.created_at));
+  let quotations = storageGetAll('quotation.').sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''));
 
   if (search) {
     quotations = quotations.filter(q =>

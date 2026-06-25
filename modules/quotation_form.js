@@ -24,6 +24,7 @@ import { getAllCurrencies, initCurrencyDefaults } from '../masters/currency_mast
 import { getAllCustomers, getAllCustomerLocations, parseOptionKey, getCustomer } from '../masters/customer_master.js';
 import { mountCombobox }    from '../lib/dropdown.js';
 import { openPrintWindow }  from '../lib/print_pdf.js';
+import { openEmailModal }   from '../lib/email_modal.js';
 // Editable masters — read live so admin changes take effect immediately
 import {
   getLiveCompounds, getLiveBreakers, getLivePacking,
@@ -93,7 +94,8 @@ export function renderQuotationForm(container, params = {}) {
   if (line.result) {
     _currentResult = line.result;
     renderResults(container, line.result);
-  } else if (!_isReadOnly) {
+  } else {
+    // Recalc in all modes — view mode also needs _currentResult for PDF
     recalc(container);
   }
   if (_isReadOnly) lockForm(container);
@@ -136,7 +138,9 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
       <div class="qf-topbar-actions">
         ${!isView ? `<button class="btn btn-outline" id="btn-save">Save Draft</button>` : ''}
         ${!isView && q.status !== 'sent' ? `<button class="btn btn-primary" id="btn-send">Mark as Sent</button>` : ''}
-        ${isView && ['sent','revised','won','lost'].includes(q.status) ? `<button class="btn btn-outline" id="btn-pdf">↓ PDF</button>` : ''}
+        <button class="btn btn-outline" id="btn-pdf">↓ PDF</button>
+        ${!isView ? `<button class="btn btn-outline" id="btn-approve">✉ Send for Approval</button>` : ''}
+        ${isView && ['sent','revised','won','lost'].includes(q.status) ? `<button class="btn btn-outline" id="btn-email" style="margin-left:4px">✉ Email</button>` : ''}
         ${isView && (q.status === 'sent' || q.status === 'revised') ? `<button class="btn btn-outline" id="btn-revise-btn">Revise</button>` : ''}
         ${isView && q.status === 'sent' ? `
           <button class="btn btn-success" id="btn-won">WON</button>
@@ -554,7 +558,7 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
             <div class="cf-row">
               <div class="cf-label">Cost of Production</div>
               <div class="cf-input cf-input-inline">
-                <input type="number" name="cop_rate_per_kg" min="0" step="0.01"
+                <input type="number" name="cop_rate_per_kg" min="${GP_MASTER.override_bounds.cop_rate_per_kg.min}" max="${GP_MASTER.override_bounds.cop_rate_per_kg.max}" step="0.01"
                        value="${line.cop_rate_per_kg ?? ''}" placeholder="" ${ro}>
                 <span class="cf-unit">₹ / kg</span>
               </div>
@@ -562,8 +566,8 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
             <div class="cf-row">
               <div class="cf-label">Expense per KG</div>
               <div class="cf-input cf-input-inline">
-                <input type="number" name="ovr_expenses_per_kg" step="0.01" min="0"
-                       value="${escHtml(String(line.ovr_expenses_per_kg ?? 20))}" placeholder="20" ${ro}>
+                <input type="number" name="ovr_expenses_per_kg" step="0.01" min="${GP_MASTER.override_bounds.expenses_per_kg.min}" max="${GP_MASTER.override_bounds.expenses_per_kg.max}"
+                       value="${escHtml(String(line.ovr_expenses_per_kg ?? GP_MASTER.expenses_per_kg_default))}" placeholder="${GP_MASTER.expenses_per_kg_default}" ${ro}>
                 <span class="cf-unit">₹ / kg</span>
               </div>
             </div>
@@ -574,6 +578,16 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
             <div class="cf-row">
               <div class="cf-label">Packing Type</div>
               <div class="cf-input"><select name="packing_type_id" ${ro}></select></div>
+            </div>
+            <div class="cf-row">
+              <div class="cf-label">Reel Cost <span class="cf-unit">₹/m</span></div>
+              <div class="cf-input cf-input-inline">
+                <div class="cf-auto-wrap">
+                  <input type="text" id="reel-cost-display" readonly disabled placeholder="—">
+                  <span class="cf-auto-tag">AUTO</span>
+                </div>
+                <span class="cf-unit">₹ / m</span>
+              </div>
             </div>
             <div class="cf-row">
               <div class="cf-label">Packing Cost <span class="cf-unit">₹/m</span></div>
@@ -705,239 +719,231 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
 
       </div><!-- /qf-left -->
 
-      <!-- ── Right KPI Rail ──────────────────────────────────── -->
+      <!-- ── Results Panel ──────────────────────────────────── -->
       <div class="qf-right">
         <div id="results-empty-state" class="qf-rail-empty">Fill in the form to see live calculations.</div>
         <div id="results-warnings"></div>
 
-        <div class="qf-rail-label">Live Results</div>
-        <div class="qf-kpi qf-kpi-hero">
-          <div class="qf-kpi-lab">Selling Price / m</div>
-          <div class="qf-kpi-val" id="rs-price">—</div>
-        </div>
-        <div class="qf-kpi">
-          <div class="qf-kpi-lab">RMC / m</div>
-          <div class="qf-kpi-val" id="rs-rmc">—</div>
-        </div>
-        <div class="qf-kpi">
-          <div class="qf-kpi-lab">Belt Weight</div>
-          <div class="qf-kpi-val" id="rs-total-wt">—</div>
-        </div>
-        <div class="qf-kpi">
-          <div class="qf-kpi-lab">Total Length</div>
-          <div class="qf-kpi-val" id="r-total-length">—</div>
-        </div>
-
-        <div class="qf-bd-tabs">
-          <button class="qf-bd-tab on" data-tab="summary" type="button">Summary</button>
-          <button class="qf-bd-tab"    data-tab="blocks"  type="button">Calc</button>
-          <button class="qf-bd-tab"    data-tab="weight"  type="button">Weight</button>
-          <button class="qf-bd-tab"    data-tab="cost"    type="button">Cost</button>
-          <button class="qf-bd-tab"    data-tab="pricing" type="button">Pricing</button>
-          <button class="qf-bd-tab"    data-tab="detail"  type="button">All</button>
-        </div>
-
-        <!-- Summary panel -->
-        <div class="qf-bd-panel on" id="tab-summary">
-          <div class="skim-match-card" id="skim-match-card">
-            <div class="skim-match-title">Skim ↔ Cover Compatibility</div>
-            <div class="cf-row"><div class="cf-label">Cover Grade</div><div class="cf-input"><span id="skim-match-grade-family" class="cf-derived-value">—</span></div></div>
-            <div class="cf-row"><div class="cf-label">Skim Grade</div><div class="cf-input"><span id="skim-match-skim-family" class="cf-derived-value">—</span></div></div>
-            <div class="cf-row"><div class="cf-label">Recommended</div><div class="cf-input"><span id="skim-match-recommended" class="cf-derived-value">—</span></div></div>
-            <div class="cf-row"><div class="cf-label">Status</div><div class="cf-input"><span id="skim-match-status" class="cf-derived-value">—</span></div></div>
+        <!-- KPI Hero Strip -->
+        <div class="ro-kpi-strip">
+          <div class="ro-kpi ro-kpi-hero">
+            <div class="ro-kpi-lbl">Selling Price / m</div>
+            <div class="ro-kpi-val" id="rs-price">—</div>
           </div>
-          <div class="results-section">
-            <div class="cf-section-title">Derived Dimensions &amp; Factors</div>
-            <div class="results-table">
-              <div class="rt-row"><span>Effective Width W_eff</span><span></span><span class="rt-num" id="r-w-eff">—</span></div>
-              <div class="rt-row"><span>Effective Length L_eff</span><span></span><span class="rt-num" id="r-l-eff">—</span></div>
-              <div class="rt-row"><span>Width Factor</span><span></span><span class="rt-num" id="r-width-factor">—</span></div>
-              <div class="rt-row"><span>Length Factor</span><span></span><span class="rt-num" id="r-length-factor">—</span></div>
-              <div class="rt-row"><span>Total Belt Thickness (TBT)</span><span></span><span class="rt-num" id="r-tbt">—</span></div>
-              <div class="rt-row"><span>Actual Weight / Meter</span><span></span><span class="rt-num" id="r-actual-wt-per-m">—</span></div>
-              <div class="rt-row rt-subtotal"><span>Calc. Weight / Meter</span><span></span><span class="rt-num" id="r-wt-per-m">—</span></div>
-              <div class="rt-row"><span>Compound GSM</span><span></span><span class="rt-num" id="r-compound-gsm">—</span></div>
+          <div class="ro-kpi ro-kpi-hero ro-kpi-vd">
+            <div class="ro-kpi-lbl">VD Price / m</div>
+            <div class="ro-kpi-val" id="rs-vd-price">—</div>
+          </div>
+          <div class="ro-kpi">
+            <div class="ro-kpi-lbl">RMC / m</div>
+            <div class="ro-kpi-val" id="rs-rmc">—</div>
+          </div>
+          <div class="ro-kpi">
+            <div class="ro-kpi-lbl">Belt Weight / m</div>
+            <div class="ro-kpi-val" id="rs-total-wt">—</div>
+          </div>
+          <div class="ro-kpi">
+            <div class="ro-kpi-lbl">Total Length</div>
+            <div class="ro-kpi-val" id="r-total-length">—</div>
+          </div>
+        </div>
+
+        <!-- Block 1 — Belt Specification (input summary chips) -->
+        <div class="ro-block">
+          <div class="ro-block-hd">Belt Specification</div>
+          <div class="ro-chips">
+            <div class="ro-chip"><span class="ro-chip-lbl">Width</span><span class="ro-chip-val" id="ri-width">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Fabric Type</span><span class="ro-chip-val" id="ri-fabric-type">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Belt Rating</span><span class="ro-chip-val" id="ri-rating">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">No of Ply</span><span class="ro-chip-val" id="ri-plies">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Top Cover</span><span class="ro-chip-val" id="ri-top">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Bottom Cover</span><span class="ro-chip-val" id="ri-bot">—</span></div>
+            <div class="ro-chip ro-chip-wide"><span class="ro-chip-lbl">Grade</span><span class="ro-chip-val" id="ri-grade">—</span></div>
+          </div>
+        </div>
+
+        <!-- Block 2 — Weight Calculations -->
+        <div class="ro-block">
+          <div class="ro-block-hd">Weight Calculations</div>
+          <table class="ro-table">
+            <thead><tr><th>Component</th><th>per / m</th><th>Total kg</th></tr></thead>
+            <tbody>
+              <tr><td>Fabric</td><td id="rw-fabric-pm">—</td><td id="rw-fabric-kg">—</td></tr>
+              <tr><td>Top Cover</td><td id="rw-top-pm">—</td><td id="rw-top-kg">—</td></tr>
+              <tr><td>Bottom Cover</td><td id="rw-bot-pm">—</td><td id="rw-bot-kg">—</td></tr>
+              <tr><td>Skim</td><td id="rw-skim-pm">—</td><td id="rw-skim-kg">—</td></tr>
+              <tr class="ro-subtotal"><td>Fabric Compound <span class="ro-note">(T+B+S)</span></td><td id="rw-compound-pm">—</td><td id="rw-compound-kg">—</td></tr>
+              <tr id="rw-bot-row" style="display:none"><td>BOT</td><td id="rw-bot-brk-pm">—</td><td id="rw-bot-brk-kg">—</td></tr>
+              <tr id="rw-bob-row" style="display:none"><td>BOB</td><td id="rw-bob-brk-pm">—</td><td id="rw-bob-brk-kg">—</td></tr>
+              <tr class="ro-total"><td><strong>Total Calculated</strong></td><td id="rw-calc-pm">—</td><td id="rw-calc-kg">—</td></tr>
+              <tr class="ro-total ro-actual"><td><strong>Total Actual</strong><span class="ro-note"> (no wastage)</span></td><td id="rw-actual-pm">—</td><td id="rw-actual-kg">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Block 3 — Costing -->
+        <div class="ro-block">
+          <div class="ro-block-hd">Costing</div>
+          <table class="ro-table">
+            <thead><tr><th>Component</th><th>₹ / m</th><th>Total ₹</th></tr></thead>
+            <tbody>
+              <tr><td>Fabric</td><td id="rc-fabric-pm">—</td><td id="rc-fabric-tot">—</td></tr>
+              <tr><td>Top Cover</td><td id="rc-top-pm">—</td><td id="rc-top-tot">—</td></tr>
+              <tr><td>Bottom Cover</td><td id="rc-bot-pm">—</td><td id="rc-bot-tot">—</td></tr>
+              <tr><td>Skim</td><td id="rc-skim-pm">—</td><td id="rc-skim-tot">—</td></tr>
+              <tr class="ro-subtotal"><td>Fabric Compound <span class="ro-note">(T+B+S)</span></td><td id="rc-compound-pm">—</td><td id="rc-compound-tot">—</td></tr>
+              <tr id="rc-bot-row" style="display:none"><td>BOT</td><td id="rc-bot-brk-pm">—</td><td id="rc-bot-brk-tot">—</td></tr>
+              <tr id="rc-bob-row" style="display:none"><td>BOB</td><td id="rc-bob-brk-pm">—</td><td id="rc-bob-brk-tot">—</td></tr>
+              <tr class="ro-total"><td><strong>Total Calculated</strong></td><td id="rc-calc-pm">—</td><td id="rc-calc-tot">—</td></tr>
+              <tr class="ro-total ro-actual"><td><strong>Total Actual</strong><span class="ro-note"> (no wastage)</span></td><td id="rc-actual-pm">—</td><td id="rc-actual-tot">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Block 4 — Pricing -->
+        <div class="ro-block">
+          <div class="ro-block-hd">Pricing</div>
+          <table class="ro-table ro-table-4col">
+            <thead><tr><th>Item</th><th>₹ / m</th><th>₹ / kg</th><th>Total ₹</th></tr></thead>
+            <tbody>
+              <tr><td>Total Cost / m <span class="ro-note">(mat + COP + exp + crate + freight)</span></td><td id="rp-rmc-pm">—</td><td id="rp-rmc-kg">—</td><td id="rp-rmc-tot">—</td></tr>
+              <tr><td>Material Cost / m <span class="ro-note">(fabric + rubber only)</span></td><td id="rp-rmcvd-pm">—</td><td id="rp-rmcvd-kg">—</td><td id="rp-rmcvd-tot">—</td></tr>
+              <tr class="ro-subtotal"><td>CD Price / m <span class="ro-note">(GP% on full cost)</span></td><td id="rp-rmcgp-pm">—</td><td id="rp-rmcgp-kg">—</td><td id="rp-rmcgp-tot">—</td></tr>
+              <tr class="ro-subtotal"><td>VD Price / m <span class="ro-note">(GP% on material only)</span></td><td id="rp-rmcvdgp-pm">—</td><td id="rp-rmcvdgp-kg">—</td><td id="rp-rmcvdgp-tot">—</td></tr>
+              <tr><td>Crate Cost</td><td id="rp-crate-pm">—</td><td id="rp-crate-kg">—</td><td id="rp-crate-tot">—</td></tr>
+              <tr id="rp-reel-row"><td>Reel Cost</td><td id="rp-reel-pm">—</td><td id="rp-reel-kg">—</td><td id="rp-reel-tot">—</td></tr>
+              <tr id="rp-freight-row"><td>Freight Cost</td><td id="rp-freight-pm">—</td><td id="rp-freight-kg">—</td><td id="rp-freight-tot">—</td></tr>
+              <tr class="ro-total"><td><strong>Total Material Cost</strong></td><td colspan="2" id="rp-total-rmcvd-pm">—</td><td id="rp-total-rmcvd">—</td></tr>
+              <tr class="ro-total ro-hero-row"><td><strong>Total VD Quotation</strong></td><td colspan="2" id="rp-total-quot-pm">—</td><td id="rp-total-quot-vd">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Skim compatibility (hidden, populated for warnings) -->
+        <div id="skim-match-card" class="ro-block ro-block-skim" style="display:none">
+          <div class="ro-block-hd ro-block-hd-warn">Skim ↔ Cover Compatibility</div>
+          <div class="ro-chips ro-chips-2">
+            <div class="ro-chip"><span class="ro-chip-lbl">Cover Grade</span><span class="ro-chip-val" id="skim-match-grade-family">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Skim Grade</span><span class="ro-chip-val" id="skim-match-skim-family">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Recommended</span><span class="ro-chip-val" id="skim-match-recommended">—</span></div>
+            <div class="ro-chip ro-chip-wide"><span class="ro-chip-lbl">Status</span><span class="ro-chip-val" id="skim-match-status">—</span></div>
+          </div>
+        </div>
+
+        <!-- Final price / discount input (preserved for pricing logic) -->
+        <div class="ro-block">
+          <div class="ro-block-hd">Final Price</div>
+          <div class="ro-chips">
+            <div class="ro-chip ro-chip-wide">
+              <span class="ro-chip-lbl">Final Price / m</span>
+              <span class="ro-chip-val" id="r-final-per-m">—</span>
             </div>
-          </div>
-        </div>
-
-        <!-- Weight panel -->
-        <div class="qf-bd-panel" id="tab-weight">
-          <div class="results-section">
-            <div class="cf-section-title">Weight Calculations</div>
-            <div class="results-table">
-              <div class="rt-row rt-subtotal">
-                <span><strong>Actual Weight / m</strong></span>
-                <span class="rt-factor">Total Calc Wt ÷ L_eff</span>
-                <span class="rt-num" id="r-actual-wt-m">—</span>
-              </div>
-              <div class="rt-row">
-                <span>Calc. Weight / m</span>
-                <span class="rt-factor">Total Calc Wt ÷ Total Length</span>
-                <span class="rt-num" id="r-calc-wt-per-m">—</span>
-              </div>
-              <div class="rt-row">
-                <span>Total Actual Belt Weight</span>
-                <span class="rt-factor">Actual/m × Total Length</span>
-                <span class="rt-num" id="r-total-actual-wt">—</span>
-              </div>
-              <div class="rt-row">
-                <span>Total Calc Belt Weight</span>
-                <span class="rt-factor">Computed over L_eff</span>
-                <span class="rt-num" id="r-total-calc-wt">—</span>
-              </div>
-              <div class="rt-header"><span>Component</span><span>kg / m</span><span class="rt-num">Weight (kg)</span></div>
-              <div class="rt-row"><span>Top Cover</span><span id="r-cover-top-per-m" class="rt-factor">—</span><span class="rt-num" id="r-cover-top-val">—</span></div>
-              <div class="rt-row"><span>Bottom Cover</span><span id="r-cover-bot-per-m" class="rt-factor">—</span><span class="rt-num" id="r-cover-bot-val">—</span></div>
-              <div class="rt-row rt-subtotal" id="r-cover"><span>Cover (Top + Bot)</span><span id="r-cover-per-m" class="rt-factor">—</span><span class="rt-num" id="r-cover-val">—</span></div>
-              <div class="rt-row" id="r-fabric"><span>Carcass Fabric</span><span id="r-fabric-per-m" class="rt-factor">—</span><span class="rt-num" id="r-fabric-val">—</span></div>
-              <div class="rt-row" id="r-skim"><span>Fabric Skim</span><span id="r-skim-per-m" class="rt-factor">—</span><span class="rt-num" id="r-skim-val">—</span></div>
-              <div class="rt-row rt-subtotal"><span>Compound (Cover + Skim)</span><span id="r-compound-per-m" class="rt-factor">—</span><span class="rt-num" id="r-compound-val">—</span></div>
-              <div class="rt-row rt-subtotal" id="r-no-brk"><span>Weight w/o Breaker</span><span id="r-no-brk-per-m" class="rt-factor">—</span><span class="rt-num" id="r-no-brk-val">—</span></div>
-              <div class="rt-row" id="r-brk1" style="display:none"><span>Breaker 1 (Top)</span><span id="r-brk1-per-m" class="rt-factor">—</span><span class="rt-num" id="r-brk1-val">—</span></div>
-              <div class="rt-row" id="r-brk1-skim" style="display:none"><span>Breaker 1 Skim</span><span id="r-brk1-skim-per-m" class="rt-factor">—</span><span class="rt-num" id="r-brk1-skim-val">—</span></div>
-              <div class="rt-row" id="r-brk2" style="display:none"><span>Breaker 2 (Bot)</span><span id="r-brk2-per-m" class="rt-factor">—</span><span class="rt-num" id="r-brk2-val">—</span></div>
-              <div class="rt-row" id="r-brk2-skim" style="display:none"><span>Breaker 2 Skim</span><span id="r-brk2-skim-per-m" class="rt-factor">—</span><span class="rt-num" id="r-brk2-skim-val">—</span></div>
-              <div class="rt-row rt-total"><span><strong>Total Belt Weight</strong></span><span></span><span class="rt-num" id="r-total-wt">—</span></div>
+            <div class="ro-chip ro-chip-wide">
+              <span class="ro-chip-lbl">Final Price Total</span>
+              <span class="ro-chip-val" id="r-final-total">—</span>
             </div>
-          </div>
-        </div>
-
-        <!-- Cost panel -->
-        <div class="qf-bd-panel" id="tab-cost">
-          <div class="results-section">
-            <div class="cf-section-title">Total Belt Cost</div>
-            <div class="results-table">
-              <div class="rt-header"><span>Component</span><span class="rt-num">₹ / m</span><span class="rt-num">Total (₹)</span></div>
-              <div class="rt-row"><span>Cover (Top + Bot)</span><span class="rt-num" id="r-cover-cost-per-m">—</span><span class="rt-num" id="r-cover-cost">—</span></div>
-              <div class="rt-row"><span>Fabric Cost</span><span class="rt-num" id="r-fabric-cost-per-m">—</span><span class="rt-num" id="r-fabric-cost">—</span></div>
-              <div class="rt-row"><span>Skim Cost</span><span class="rt-num" id="r-skim-cost-per-m">—</span><span class="rt-num" id="r-skim-cost">—</span></div>
-              <div class="rt-row" id="r-brk1-cost-row" style="display:none"><span>Breaker 1 Cost</span><span></span><span class="rt-num" id="r-brk1-cost">—</span></div>
-              <div class="rt-row" id="r-brk1-skim-cost-row" style="display:none"><span>Breaker 1 Skim Cost</span><span></span><span class="rt-num" id="r-brk1-skim-cost">—</span></div>
-              <div class="rt-row" id="r-brk2-cost-row" style="display:none"><span>Breaker 2 Cost</span><span></span><span class="rt-num" id="r-brk2-cost">—</span></div>
-              <div class="rt-row" id="r-brk2-skim-cost-row" style="display:none"><span>Breaker 2 Skim Cost</span><span></span><span class="rt-num" id="r-brk2-skim-cost">—</span></div>
-              <div class="rt-row rt-subtotal"><span>Compound Cost</span><span class="rt-num" id="r-compound-cost-per-m">—</span><span class="rt-num" id="r-compound-cost-val">—</span></div>
-              <div class="rt-row"><span>Cost of Production</span><span></span><span class="rt-num" id="r-cop-cost">—</span></div>
-              <div class="rt-row" id="r-expenses-row" style="display:none"><span>Expense per KG</span><span></span><span class="rt-num" id="r-expenses-cost">—</span></div>
-              <div class="rt-row"><span>Packing Cost</span><span></span><span class="rt-num" id="r-packing-cost">—</span></div>
-              <div class="rt-row"><span>Freight Cost</span><span class="rt-num" id="r-freight-cost-per-m">—</span><span class="rt-num" id="r-freight-cost">—</span></div>
-              <div class="rt-row rt-total"><span><strong>Total Belt Cost</strong></span><span></span><span class="rt-num" id="r-total-cost">—</span></div>
-              <div class="rt-row"><span>Price per Kg</span><span></span><span class="rt-num" id="r-price-per-kg">—</span></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Pricing panel -->
-        <div class="qf-bd-panel" id="tab-pricing">
-          <div class="results-section">
-            <div class="cf-section-title">Pricing</div>
-            <div class="results-table results-pricing">
-              <div class="rt-row"><span>RMC</span><span></span><span class="rt-num" id="r-rmc">—</span></div>
-              <div class="rt-row"><span>GP (Standard)</span><span></span><span class="rt-num" id="r-gp">—</span></div>
-              <div class="rt-row"><span>GP VD (material)</span><span></span><span class="rt-num" id="r-gp-vd">—</span></div>
-              <div class="rt-row rt-price-row"><span><strong>Selling Price Total</strong></span><span></span><span class="rt-num rt-price" id="r-cd-total">—</span></div>
-              <div class="rt-row"><span>Selling Price / m</span><span></span><span class="rt-num rt-price" id="r-cd-per-m">—</span></div>
-              <div class="rt-row rt-price-row vd-row"><span><strong>Selling Price VD</strong></span><span></span><span class="rt-num rt-price vd-price" id="r-vd-total">—</span></div>
-              <div class="rt-row vd-row"><span>Selling Price VD / m</span><span></span><span class="rt-num vd-price" id="r-vd-per-m">—</span></div>
-              <div class="rt-row rt-highlight"><span>Price / mm width (CD)</span><span></span><span class="rt-num" id="r-cd-per-mm">—</span></div>
-              <div class="rt-row"><span>Price / mm width (VD)</span><span></span><span class="rt-num" id="r-vd-per-mm">—</span></div>
-              <div class="rt-row"><span>RMC With GP / m</span><span></span><span class="rt-num" id="r-rmc-with-gp">—</span></div>
-              <div class="rt-row"><span>Min Quotation RMC / m</span><span></span><span class="rt-num" id="r-min-quot-rmc">—</span></div>
-              <div class="rt-row"><span>Per mm Running Price</span><span></span><span class="rt-num" id="r-per-mm-running">—</span></div>
-              <div class="rt-row"><span>Total RMC Amount</span><span></span><span class="rt-num" id="r-total-rmc-amount">—</span></div>
-              <div class="rt-row"><span>Total RMC VD (Material)</span><span></span><span class="rt-num" id="r-total-rmc-vd">—</span></div>
-              <div class="rt-row"><span>Min. Price / m (USD)</span><span></span><span class="rt-num" id="r-rmc-usd">—</span></div>
-              <div class="rt-row"><span>Quotation / m (USD)</span><span></span><span class="rt-num" id="r-cd-usd">—</span></div>
-            </div>
-          </div>
-          <div class="results-section" style="margin-top:.5rem">
-            <div class="cf-section-title">Final Price</div>
-            <div class="results-table">
-              <div class="rt-row rt-price-row"><span><strong>Final Price Total</strong></span><span></span><span class="rt-num rt-price" id="r-final-total">—</span></div>
-              <div class="rt-row"><span>Final Price / Meter</span><span></span><span class="rt-num rt-price" id="r-final-per-m">—</span></div>
-              <div class="rt-row">
-                <div class="cf-label">Custom Final Price / m</div><span></span>
-                <span class="rt-num">
-                  <input type="number" name="custom_final_price_per_m" step="1"
-                         value="${line.custom_final_price_per_m ?? ''}" placeholder="—" ${ro}
-                         style="width:100px;text-align:right">
-                </span>
-              </div>
+            <div class="ro-chip ro-chip-wide ro-chip-input">
+              <span class="ro-chip-lbl">Custom Final Price / m</span>
+              <input type="number" name="custom_final_price_per_m" step="1"
+                     value="${line.custom_final_price_per_m ?? ''}" placeholder="—" ${ro}
+                     class="ro-chip-input-field">
             </div>
           </div>
         </div>
 
-        <!-- Calc Blocks panel -->
-        <div class="qf-bd-panel" id="tab-blocks">
-          <div id="cc-breakdown-panel">
-
-            <!-- A — Belt weight calculation -->
-            <div class="qf-calc-group">
-              <div class="qf-calc-group-hd">A — Belt weight calculation</div>
-              <div class="qf-calc-chips">
-                <div class="qf-calc-chip"><span class="qf-calc-lbl">Width</span><span class="qf-calc-val" id="cc-width">—</span></div>
-                <div class="qf-calc-chip"><span class="qf-calc-lbl">Length</span><span class="qf-calc-val" id="cc-length">—</span></div>
-                <div class="qf-calc-chip qf-calc-chip-wide"><span class="qf-calc-lbl">Calculated Belt Weight / m</span><span class="qf-calc-val" id="cc-belt-wt">—</span></div>
-              </div>
-            </div>
-
-            <!-- B — Fabric (carcass) calculations -->
-            <div class="qf-calc-group">
-              <div class="qf-calc-group-hd">B — Fabric (carcass) calculations</div>
-              <div class="qf-calc-chips">
-                <div class="qf-calc-chip qf-calc-chip-wide"><span class="qf-calc-lbl">Length (L_eff)</span><span class="qf-calc-val" id="cc-len-per-ply">—</span></div>
-                <div class="qf-calc-chip"><span class="qf-calc-lbl">GSM</span><span class="qf-calc-val" id="cc-fab-gsm">—</span></div>
-                <div class="qf-calc-chip"><span class="qf-calc-lbl">Price / kg</span><span class="qf-calc-val" id="cc-fab-price">—</span></div>
-                <div class="qf-calc-chip"><span class="qf-calc-lbl">Fabric Weight</span><span class="qf-calc-val" id="cc-fab-weight">—</span></div>
-                <div class="qf-calc-chip"><span class="qf-calc-lbl">Fabric Cost</span><span class="qf-calc-val" id="cc-fab-cost">—</span></div>
-              </div>
-            </div>
-
-            <!-- C — BOT / BOB calculations -->
-            <div class="qf-calc-group" id="cc-brk-group" style="display:none">
-              <div class="qf-calc-group-hd">C — BOT / BOB calculations</div>
-              <div class="qf-calc-chips">
-                <div class="qf-calc-chip qf-calc-chip-wide"><span class="qf-calc-lbl">Length (L_eff)</span><span class="qf-calc-val" id="cc-brk-length">—</span></div>
-                <div class="qf-calc-chip" id="cc-bot-chip" style="display:none"><span class="qf-calc-lbl">BOT GSM</span><span class="qf-calc-val" id="cc-bot-gsm">—</span></div>
-                <div class="qf-calc-chip" id="cc-bot-price-chip" style="display:none"><span class="qf-calc-lbl">BOT Price / kg</span><span class="qf-calc-val" id="cc-bot-price">—</span></div>
-                <div class="qf-calc-chip" id="cc-bot-wt-chip" style="display:none"><span class="qf-calc-lbl">BOT Fabric Wt</span><span class="qf-calc-val" id="cc-bot-fab-wt">—</span></div>
-                <div class="qf-calc-chip" id="cc-bob-chip" style="display:none"><span class="qf-calc-lbl">BOB GSM</span><span class="qf-calc-val" id="cc-bob-gsm">—</span></div>
-                <div class="qf-calc-chip" id="cc-bob-price-chip" style="display:none"><span class="qf-calc-lbl">BOB Price / kg</span><span class="qf-calc-val" id="cc-bob-price">—</span></div>
-                <div class="qf-calc-chip" id="cc-bob-wt-chip" style="display:none"><span class="qf-calc-lbl">BOB Fabric Wt</span><span class="qf-calc-val" id="cc-bob-fab-wt">—</span></div>
-              </div>
-            </div>
-
-            <!-- D — Compound (rubber) calculations -->
-            <div class="qf-calc-group">
-              <div class="qf-calc-group-hd">D — Compound (rubber) calculations</div>
-              <div class="qf-calc-chips">
-                <div class="qf-calc-chip"><span class="qf-calc-lbl">Compound Weight</span><span class="qf-calc-val" id="cc-cmpd-wt">—</span></div>
-                <div class="qf-calc-chip"><span class="qf-calc-lbl">Cover Weight</span><span class="qf-calc-val" id="cc-total-cover-wt">—</span></div>
-                <div class="qf-calc-chip"><span class="qf-calc-lbl">Skim Weight</span><span class="qf-calc-val" id="cc-skim-wt">—</span></div>
-                <div class="qf-calc-chip"><span class="qf-calc-lbl">Cost of Cover</span><span class="qf-calc-val" id="cc-cover-cost">—</span></div>
-                <div class="qf-calc-chip"><span class="qf-calc-lbl">Cost of Skim</span><span class="qf-calc-val" id="cc-skim-cost-chip">—</span></div>
-                <div class="qf-calc-chip qf-calc-chip-wide"><span class="qf-calc-lbl">Total Compound Cost</span><span class="qf-calc-val" id="cc-total-cmpd-cost">—</span></div>
-              </div>
-            </div>
-
-            <!-- E — Total belt calculations -->
-            <div class="qf-calc-group qf-calc-group-total">
-              <div class="qf-calc-group-hd">E — Total belt calculations</div>
-              <div class="qf-calc-chips">
-                <div class="qf-calc-chip qf-calc-chip-wide"><span class="qf-calc-lbl">Fabric + BOT + BOB Cost / m</span><span class="qf-calc-val" id="cc-fab-brk-cost">—</span></div>
-                <div class="qf-calc-chip qf-calc-chip-wide qf-calc-chip-hero"><span class="qf-calc-lbl">Minimum Quoting Price / m</span><span class="qf-calc-val" id="cc-min-price">—</span></div>
-              </div>
-            </div>
-
-          </div>
-        </div>
-
-        <!-- All Fields panel -->
-        <div class="qf-bd-panel" id="tab-detail">
-          <div class="results-section">
-            <div class="cf-section-title">Complete Reference</div>
-            <div id="detailed-fields"></div>
-          </div>
+        <!-- Hidden legacy IDs required by renderDetailedFields / updateDiscountResults -->
+        <span id="r-w-eff"         style="display:none">—</span>
+        <span id="r-l-eff"         style="display:none">—</span>
+        <span id="r-width-factor"  style="display:none">—</span>
+        <span id="r-length-factor" style="display:none">—</span>
+        <span id="r-tbt"           style="display:none">—</span>
+        <span id="r-actual-wt-per-m" style="display:none">—</span>
+        <span id="r-wt-per-m"      style="display:none">—</span>
+        <span id="r-compound-gsm"  style="display:none">—</span>
+        <span id="r-actual-wt-m"   style="display:none">—</span>
+        <span id="r-calc-wt-per-m" style="display:none">—</span>
+        <span id="r-total-actual-wt" style="display:none">—</span>
+        <span id="r-total-calc-wt" style="display:none">—</span>
+        <span id="r-cover-top-val" style="display:none">—</span>
+        <span id="r-cover-top-per-m" style="display:none">—</span>
+        <span id="r-cover-bot-val" style="display:none">—</span>
+        <span id="r-cover-bot-per-m" style="display:none">—</span>
+        <span id="r-cover-val"     style="display:none">—</span>
+        <span id="r-cover-per-m"   style="display:none">—</span>
+        <span id="r-compound-val"  style="display:none">—</span>
+        <span id="r-compound-per-m" style="display:none">—</span>
+        <span id="r-fabric-val"    style="display:none">—</span>
+        <span id="r-fabric-per-m"  style="display:none">—</span>
+        <span id="r-skim-val"      style="display:none">—</span>
+        <span id="r-skim-per-m"    style="display:none">—</span>
+        <span id="r-no-brk-val"    style="display:none">—</span>
+        <span id="r-no-brk-per-m"  style="display:none">—</span>
+        <span id="r-brk1-val"      style="display:none">—</span>
+        <span id="r-brk1-per-m"    style="display:none">—</span>
+        <span id="r-brk1-skim-val" style="display:none">—</span>
+        <span id="r-brk1-skim-per-m" style="display:none">—</span>
+        <span id="r-brk2-val"      style="display:none">—</span>
+        <span id="r-brk2-per-m"    style="display:none">—</span>
+        <span id="r-brk2-skim-val" style="display:none">—</span>
+        <span id="r-brk2-skim-per-m" style="display:none">—</span>
+        <span id="r-total-wt"      style="display:none">—</span>
+        <span id="r-cover-cost"    style="display:none">—</span>
+        <span id="r-cover-cost-per-m" style="display:none">—</span>
+        <span id="r-fabric-cost"   style="display:none">—</span>
+        <span id="r-fabric-cost-per-m" style="display:none">—</span>
+        <span id="r-skim-cost"     style="display:none">—</span>
+        <span id="r-skim-cost-per-m" style="display:none">—</span>
+        <span id="r-compound-cost-val" style="display:none">—</span>
+        <span id="r-compound-cost-per-m" style="display:none">—</span>
+        <span id="r-cop-cost"      style="display:none">—</span>
+        <span id="r-expenses-cost" style="display:none">—</span>
+        <span id="r-packing-cost"  style="display:none">—</span>
+        <span id="r-freight-cost"  style="display:none">—</span>
+        <span id="r-freight-cost-per-m" style="display:none">—</span>
+        <span id="r-total-cost"    style="display:none">—</span>
+        <span id="r-price-per-kg"  style="display:none">—</span>
+        <span id="r-brk1-cost"     style="display:none">—</span>
+        <span id="r-brk1-skim-cost" style="display:none">—</span>
+        <span id="r-brk2-cost"     style="display:none">—</span>
+        <span id="r-brk2-skim-cost" style="display:none">—</span>
+        <span id="r-rmc"           style="display:none">—</span>
+        <span id="r-gp"            style="display:none">—</span>
+        <span id="r-gp-vd"         style="display:none">—</span>
+        <span id="r-cd-total"      style="display:none">—</span>
+        <span id="r-cd-per-m"      style="display:none">—</span>
+        <span id="r-vd-total"      style="display:none">—</span>
+        <span id="r-vd-per-m"      style="display:none">—</span>
+        <span id="r-cd-per-mm"     style="display:none">—</span>
+        <span id="r-vd-per-mm"     style="display:none">—</span>
+        <span id="r-rmc-with-gp"   style="display:none">—</span>
+        <span id="r-min-quot-rmc"  style="display:none">—</span>
+        <span id="r-per-mm-running" style="display:none">—</span>
+        <span id="r-total-rmc-amount" style="display:none">—</span>
+        <span id="r-total-rmc-vd"  style="display:none">—</span>
+        <span id="r-rmc-usd"       style="display:none">—</span>
+        <span id="r-cd-usd"        style="display:none">—</span>
+        <span id="r-brk1"          style="display:none">—</span>
+        <span id="r-brk1-skim"     style="display:none">—</span>
+        <span id="r-brk2"          style="display:none">—</span>
+        <span id="r-brk2-skim"     style="display:none">—</span>
+        <span id="r-brk1-cost-row" style="display:none">—</span>
+        <span id="r-brk1-skim-cost-row" style="display:none">—</span>
+        <span id="r-brk2-cost-row" style="display:none">—</span>
+        <span id="r-brk2-skim-cost-row" style="display:none">—</span>
+        <span id="r-expenses-row"  style="display:none">—</span>
+        <div id="detailed-fields"  style="display:none"></div>
+        <div id="cc-breakdown-panel" style="display:none">
+          <span id="cc-width">—</span><span id="cc-length">—</span><span id="cc-belt-wt">—</span>
+          <span id="cc-len-per-ply">—</span><span id="cc-fab-gsm">—</span><span id="cc-fab-price">—</span>
+          <span id="cc-fab-weight">—</span><span id="cc-fab-cost">—</span><span id="cc-brk-length">—</span>
+          <span id="cc-cmpd-wt">—</span><span id="cc-total-cover-wt">—</span><span id="cc-skim-wt">—</span>
+          <span id="cc-cover-cost">—</span><span id="cc-skim-cost-chip">—</span><span id="cc-total-cmpd-cost">—</span>
+          <span id="cc-fab-brk-cost">—</span><span id="cc-min-price">—</span>
+          <span id="cc-brk-group">—</span>
+          <span id="cc-bot-chip">—</span><span id="cc-bot-gsm">—</span><span id="cc-bot-price-chip">—</span>
+          <span id="cc-bot-price">—</span><span id="cc-bot-wt-chip">—</span><span id="cc-bot-fab-wt">—</span>
+          <span id="cc-bob-chip">—</span><span id="cc-bob-gsm">—</span><span id="cc-bob-price-chip">—</span>
+          <span id="cc-bob-price">—</span><span id="cc-bob-wt-chip">—</span><span id="cc-bob-fab-wt">—</span>
         </div>
 
       </div><!-- /qf-right -->
@@ -1208,6 +1214,12 @@ function updateDerivedDisplays(container, _line) {
   const packingRow = _PACKING.find(r => r.id === packingId);
   const pkEl = container.querySelector('#packing-cost-display');
   if (pkEl) pkEl.value = packingRow ? packingRow.packing_cost_per_meter.toFixed(2) : '—';
+
+  // Reel cost from selected reel type
+  const reelId  = container.querySelector('[name="reel_type_id"]')?.value;
+  const reelRow = _PACKING.find(r => r.id === reelId);
+  const rlEl = container.querySelector('#reel-cost-display');
+  if (rlEl) rlEl.value = reelRow ? reelRow.packing_cost_per_meter.toFixed(2) : '—';
 
   // Freight cost auto-fill from destination
   const freightId  = container.querySelector('[name="freight_id"]')?.value;
@@ -1671,9 +1683,9 @@ function renderResults(container, result) {
   if (!result) return;
   const es = container.querySelector('#results-empty-state');
   if (es) es.style.display = 'none';
-  const { derived: d, costs: c, pricing: p, warnings } = result;
+  const { derived: d, costs: c, pricing: p, inputs: inp, warnings } = result;
 
-  // Warnings — include GP-below-20 warning if applicable
+  // Warnings
   const gpApplied = p.gp_pct_applied != null ? p.gp_pct_applied * 100 : null;
   const allWarnings = [...warnings];
   if (gpApplied != null && gpApplied < 20) {
@@ -1683,149 +1695,229 @@ function renderResults(container, result) {
     ? `<div class="alert-banner">${allWarnings.map(w => `<p>⚠ ${escHtml(w)}</p>`).join('')}</div>`
     : '';
 
-  const wEff = d.effective_width_m?.toFixed(3) ?? '—';
+  // ── KPI strip ────────────────────────────────────────────────────────────────
+  setText(container, '#rs-price',    p.cd_price_per_meter != null ? formatRupees(p.cd_price_per_meter) + ' / m' : '—');
+  setText(container, '#rs-vd-price', p.vd_price_per_meter != null ? formatRupees(p.vd_price_per_meter) + ' / m' : '—');
+  setText(container, '#rs-rmc',      p.rmc_per_meter      != null ? formatRupees(p.rmc_per_meter)      + ' / m' : '—');
+  setText(container, '#rs-total-wt', d.calc_weight_per_meter_kg > 0 ? formatKg(d.calc_weight_per_meter_kg) + ' / m' : '—');
+  setText(container, '#r-total-length', d.total_length_m  != null ? d.total_length_m.toFixed(2) + ' m'          : '—');
 
-  // Summary tab stat cards
-  setText(container, '#rs-total-wt', d.total_belt_weight_kg != null ? formatKg(d.total_belt_weight_kg)       : '—');
-  setText(container, '#rs-rmc',      p.rmc_per_meter        != null ? formatRupees(p.rmc_per_meter) + '/m'   : '—');
-  setText(container, '#rs-price',    p.cd_price_per_meter   != null ? formatRupees(p.cd_price_per_meter) + '/m' : '—');
+  // ── Block 1 — Belt Specification chips ───────────────────────────────────────
+  const s = result.snapshot ?? {};
+  const fabricRow = (() => {
+    try { return (typeof FABRIC_STRENGTH_MASTER !== 'undefined')
+      ? FABRIC_STRENGTH_MASTER.find(r => r.fabric_type === inp.fabric_type && r.total_strength === inp.fabric_strength && r.no_of_ply === inp.plies)
+      : null; } catch(_) { return null; }
+  })();
+  setText(container, '#ri-width',       inp.width_mm       ? `${inp.width_mm} mm`                              : '—');
+  setText(container, '#ri-fabric-type', inp.fabric_type    ?? '—');
+  setText(container, '#ri-rating',      inp.fabric_strength ? `${inp.fabric_strength} kN/m`                    : '—');
+  setText(container, '#ri-plies',       inp.plies          ? `${inp.plies} ply`                                : '—');
+  setText(container, '#ri-top',         inp.top_cover_thickness_mm    ? `${inp.top_cover_thickness_mm} mm`     : '—');
+  setText(container, '#ri-bot',         inp.bottom_cover_thickness_mm ? `${inp.bottom_cover_thickness_mm} mm`  : '—');
+  setText(container, '#ri-grade',       s.top_cover?.code  ?? '—');
 
-  // Derived dimensions
-  setText(container, '#r-w-eff',        d.effective_width_m  != null ? d.effective_width_m.toFixed(4)  + ' m' : '—');
-  setText(container, '#r-l-eff',        d.effective_length_m != null ? d.effective_length_m.toFixed(3) + ' m' : '—');
-  setText(container, '#r-total-length', d.total_length_m     != null ? d.total_length_m.toFixed(2)     + ' m' : '—');
+  // ── Block 2 — Weight Calculations ────────────────────────────────────────────
+  const fKg  = v => v != null && v >= 0 ? formatKg(v)    : '—';
+  const fPm  = v => v != null && v >  0 ? formatKg(v) + ' / m' : '—';
 
-  // Summary derived dimensions + factors
-  setText(container, '#r-width-factor',     d.width_factor  != null ? d.width_factor.toFixed(4)  : '—');
-  setText(container, '#r-length-factor',    d.length_factor != null ? d.length_factor.toFixed(4) : '—');
-  setText(container, '#r-tbt',             d.tbt_mm        != null ? d.tbt_mm.toFixed(2) + ' mm' : '—');
-  setText(container, '#r-actual-wt-per-m', d.actual_weight_per_meter_kg != null ? formatKg(d.actual_weight_per_meter_kg) + '/m' : '—');
+  setText(container, '#rw-fabric-pm',  fPm(d.fabric_weight_per_m));
+  setText(container, '#rw-fabric-kg',  fKg(d.fabric_weight_kg));
+  setText(container, '#rw-top-pm',     fPm(d.top_cover_weight_per_m));
+  setText(container, '#rw-top-kg',     fKg(d.top_cover_weight_kg));
+  setText(container, '#rw-bot-pm',     fPm(d.bottom_cover_weight_per_m));
+  setText(container, '#rw-bot-kg',     fKg(d.bottom_cover_weight_kg));
+  setText(container, '#rw-skim-pm',    fPm(d.skim_weight_per_m));
+  setText(container, '#rw-skim-kg',    fKg(d.skim_weight_kg));
+  setText(container, '#rw-compound-pm', fPm(d.fabric_compound_weight_per_m));
+  setText(container, '#rw-compound-kg', fKg(d.fabric_compound_weight_kg));
+
+  const hasBOT = d.bot_weight_kg > 0;
+  const hasBOB = d.bob_weight_kg > 0;
+  const botRow = container.querySelector('#rw-bot-row');
+  const bobRow = container.querySelector('#rw-bob-row');
+  if (botRow) botRow.style.display = hasBOT ? '' : 'none';
+  if (bobRow) bobRow.style.display = hasBOB ? '' : 'none';
+  if (hasBOT) { setText(container, '#rw-bot-brk-pm', fPm(d.bot_weight_per_m)); setText(container, '#rw-bot-brk-kg', fKg(d.bot_weight_kg)); }
+  if (hasBOB) { setText(container, '#rw-bob-brk-pm', fPm(d.bob_weight_per_m)); setText(container, '#rw-bob-brk-kg', fKg(d.bob_weight_kg)); }
+
+  setText(container, '#rw-calc-pm',   fPm(d.calc_weight_per_meter_kg));
+  setText(container, '#rw-calc-kg',   fKg(d.total_calc_weight_kg));
+  setText(container, '#rw-actual-pm', fPm(d.actual_weight_per_m_blended));
+  setText(container, '#rw-actual-kg', fKg(d.total_actual_belt_weight_kg));
+
+  // ── Block 3 — Costing ────────────────────────────────────────────────────────
+  const fRs  = v => v != null && v >= 0 ? formatRupees(v)            : '—';
+  const fRpm = v => v != null && v >  0 ? formatRupees(v) + ' / m'   : '—';
+
+  setText(container, '#rc-fabric-pm',   fRpm(c.fabric_cost_per_m));
+  setText(container, '#rc-fabric-tot',  fRs(c.fabric_cost));
+  setText(container, '#rc-top-pm',      fRpm(c.top_cover_cost_per_m));
+  setText(container, '#rc-top-tot',     fRs(c.top_cover_cost));
+  setText(container, '#rc-bot-pm',      fRpm(c.bottom_cover_cost_per_m));
+  setText(container, '#rc-bot-tot',     fRs(c.bottom_cover_cost));
+  setText(container, '#rc-skim-pm',     fRpm(c.skim_cost_per_m));
+  setText(container, '#rc-skim-tot',    fRs(c.skim_cost));
+  setText(container, '#rc-compound-pm',  fRpm(c.fabric_compound_cost_per_m));
+  setText(container, '#rc-compound-tot', fRs(c.fabric_compound_cost));
+
+  const cBotRow = container.querySelector('#rc-bot-row');
+  const cBobRow = container.querySelector('#rc-bob-row');
+  if (cBotRow) cBotRow.style.display = (c.breaker_top_total_cost > 0) ? '' : 'none';
+  if (cBobRow) cBobRow.style.display = (c.breaker_bot_total_cost > 0) ? '' : 'none';
+  if (c.breaker_top_total_cost > 0) { setText(container, '#rc-bot-brk-pm', fRpm(c.breaker_top_cost_per_m)); setText(container, '#rc-bot-brk-tot', fRs(c.breaker_top_total_cost)); }
+  if (c.breaker_bot_total_cost > 0) { setText(container, '#rc-bob-brk-pm', fRpm(c.breaker_bot_cost_per_m)); setText(container, '#rc-bob-brk-tot', fRs(c.breaker_bot_total_cost)); }
+
+  setText(container, '#rc-calc-pm',    fRpm(c.material_cost_per_m));
+  setText(container, '#rc-calc-tot',   fRs(c.material_cost));
+  setText(container, '#rc-actual-pm',  fRpm(c.actual_material_cost_per_m));
+  setText(container, '#rc-actual-tot', fRs(c.actual_material_cost));
+
+  // ── Block 4 — Pricing ────────────────────────────────────────────────────────
+  const fRkg = v => v != null && v > 0 ? formatRupees(v) + ' / kg' : '—';
+
+  setText(container, '#rp-rmc-pm',      fRpm(p.rmc_per_meter));
+  setText(container, '#rp-rmc-kg',      fRkg(p.rmc_per_kg));
+  setText(container, '#rp-rmc-tot',     fRs(p.total_rmc_cost));
+
+  setText(container, '#rp-rmcvd-pm',    fRpm(p.material_cost_per_m));
+  setText(container, '#rp-rmcvd-kg',    fRkg(p.material_cost_per_kg));
+  setText(container, '#rp-rmcvd-tot',   fRs(c.material_cost));
+
+  setText(container, '#rp-rmcgp-pm',    fRpm(p.cd_price_per_meter));
+  setText(container, '#rp-rmcgp-kg',    fRkg(p.cd_price_per_kg));
+  setText(container, '#rp-rmcgp-tot',   fRs(p.cd_total));
+
+  setText(container, '#rp-rmcvdgp-pm',  fRpm(p.vd_price_per_meter));
+  setText(container, '#rp-rmcvdgp-kg',  fRkg(p.vd_price_per_kg));
+  setText(container, '#rp-rmcvdgp-tot', fRs(p.vd_total));
+
+  setText(container, '#rp-crate-pm',    fRpm(p.crate_cost_per_m));
+  setText(container, '#rp-crate-kg',    fRkg(p.crate_cost_per_kg));
+  setText(container, '#rp-crate-tot',   fRs(p.crate_cost_total));
+
+  const reelRow = container.querySelector('#rp-reel-row');
+  if (reelRow) reelRow.style.display = (p.reel_cost_total > 0) ? '' : 'none';
+  setText(container, '#rp-reel-pm',    fRpm(p.reel_cost_per_m));
+  setText(container, '#rp-reel-kg',    fRkg(p.reel_cost_per_kg));
+  setText(container, '#rp-reel-tot',   fRs(p.reel_cost_total));
+
+  const freightRow = container.querySelector('#rp-freight-row');
+  if (freightRow) freightRow.style.display = (p.freight_cost_total > 0) ? '' : 'none';
+  setText(container, '#rp-freight-pm',   fRpm(c.freight_cost_per_m));
+  setText(container, '#rp-freight-kg',   fRkg(p.freight_cost_per_kg));
+  setText(container, '#rp-freight-tot',  fRs(p.freight_cost_total));
+
+  setText(container, '#rp-total-rmcvd-pm', fRpm(p.material_cost_per_m));
+  setText(container, '#rp-total-rmcvd',    fRs(c.material_cost));
+
+  setText(container, '#rp-total-quot-pm',  fRpm(p.vd_price_per_meter));
+  setText(container, '#rp-total-quot-vd',  fRs(p.vd_total));
+
+  // ── Skim compatibility card ───────────────────────────────────────────────────
+  const skimCard = container.querySelector('#skim-match-card');
+  const skimWarn = allWarnings.some(w => w.toLowerCase().includes('skim'));
+  if (skimCard) skimCard.style.display = skimWarn ? '' : 'none';
+  if (skimWarn) {
+    const topCmpd = result.snapshot?.top_cover;
+    const skimCmpd = result.snapshot?.skim;
+    setText(container, '#skim-match-grade-family', topCmpd?.code ?? '—');
+    setText(container, '#skim-match-skim-family',  skimCmpd?.code ?? '—');
+    setText(container, '#skim-match-recommended',  '—');
+    setText(container, '#skim-match-status',       'Check compatibility');
+  }
+
+  // ── Legacy hidden IDs (used by renderDetailedFields) ─────────────────────────
+  const _lenM = d.total_length_m || 0;
+  const _pm   = v => _lenM > 0 ? formatKg(v / _lenM) + '/m' : '—';
+  setText(container, '#r-w-eff',           d.effective_width_m  != null ? d.effective_width_m.toFixed(4)  + ' m' : '—');
+  setText(container, '#r-l-eff',           d.effective_length_m != null ? d.effective_length_m.toFixed(3) + ' m' : '—');
+  setText(container, '#r-width-factor',    d.width_factor  != null ? d.width_factor.toFixed(4)  : '—');
+  setText(container, '#r-length-factor',   d.length_factor != null ? d.length_factor.toFixed(4) : '—');
+  setText(container, '#r-tbt',             d.tbt_mm != null ? d.tbt_mm.toFixed(2) + ' mm' : '—');
+  setText(container, '#r-actual-wt-per-m', d.actual_weight_per_m_blended > 0 ? formatKg(d.actual_weight_per_m_blended) + '/m' : '—');
   setText(container, '#r-wt-per-m',        d.weight_per_meter_kg != null ? formatKg(d.weight_per_meter_kg) + '/m' : '—');
   setText(container, '#r-compound-gsm',    d.compound_gsm != null ? d.compound_gsm.toFixed(1) + ' g/m²' : '—');
-
-  // Weight rows
-  const _lenM = d.total_length_m || 0;
-  const _pm = v => _lenM > 0 ? formatKg(v / _lenM) + '/m' : '—';
+  setText(container, '#r-actual-wt-m',     d.actual_weight_per_m_blended > 0 ? formatKg(d.actual_weight_per_m_blended) + ' / m' : '—');
+  setText(container, '#r-calc-wt-per-m',   d.calc_weight_per_meter_kg > 0 ? formatKg(d.calc_weight_per_meter_kg) + ' / m' : '—');
+  setText(container, '#r-total-actual-wt', d.total_actual_belt_weight_kg > 0 ? formatKg(d.total_actual_belt_weight_kg) : '—');
+  setText(container, '#r-total-calc-wt',   d.total_calc_weight_kg > 0 ? formatKg(d.total_calc_weight_kg) : '—');
   setText(container, '#r-cover-top-val',   formatKg(d.top_cover_weight_kg));
-  setText(container, '#r-cover-top-per-m', d.top_cover_weight_per_m    > 0 ? formatKg(d.top_cover_weight_per_m)    + '/m' : '—');
+  setText(container, '#r-cover-top-per-m', fPm(d.top_cover_weight_per_m));
   setText(container, '#r-cover-bot-val',   formatKg(d.bottom_cover_weight_kg));
-  setText(container, '#r-cover-bot-per-m', d.bottom_cover_weight_per_m > 0 ? formatKg(d.bottom_cover_weight_per_m) + '/m' : '—');
+  setText(container, '#r-cover-bot-per-m', fPm(d.bottom_cover_weight_per_m));
   setText(container, '#r-cover-val',       formatKg(d.top_cover_weight_kg + d.bottom_cover_weight_kg));
   setText(container, '#r-cover-per-m',     _lenM > 0 ? _pm(d.top_cover_weight_kg + d.bottom_cover_weight_kg) : '—');
   setText(container, '#r-compound-val',    formatKg(d.compound_weight_kg));
   setText(container, '#r-compound-per-m',  d.compound_weight_kg > 0 ? _pm(d.compound_weight_kg) : '—');
   setText(container, '#r-fabric-val',      formatKg(d.fabric_weight_kg));
-  setText(container, '#r-fabric-per-m',    d.fabric_weight_per_m > 0 ? formatKg(d.fabric_weight_per_m) + '/m' : '—');
+  setText(container, '#r-fabric-per-m',    fPm(d.fabric_weight_per_m));
   setText(container, '#r-skim-val',        formatKg(d.skim_weight_kg));
-  setText(container, '#r-skim-per-m',      d.skim_weight_per_m   > 0 ? formatKg(d.skim_weight_per_m)   + '/m' : '—');
+  setText(container, '#r-skim-per-m',      fPm(d.skim_weight_per_m));
   setText(container, '#r-no-brk-val',      formatKg(d.belt_wt_without_breaker_kg));
   setText(container, '#r-no-brk-per-m',    d.belt_wt_without_breaker_kg > 0 ? _pm(d.belt_wt_without_breaker_kg) : '—');
   setText(container, '#r-total-wt',        formatKg(d.total_belt_weight_kg));
-
-  // Weight summary rows (top of weight table)
-  setText(container, '#r-actual-wt-m',    d.actual_weight_per_meter_kg > 0 ? formatKg(d.actual_weight_per_meter_kg) + ' / m' : '—');
-  setText(container, '#r-calc-wt-per-m',  d.calc_weight_per_meter_kg   > 0 ? formatKg(d.calc_weight_per_meter_kg)   + ' / m' : '—');
-  setText(container, '#r-total-actual-wt', d.total_actual_weight_kg    > 0 ? formatKg(d.total_actual_weight_kg)              : '—');
-  setText(container, '#r-total-calc-wt',   d.total_calc_weight_kg      > 0 ? formatKg(d.total_calc_weight_kg)                : '—');
-
-  // Breaker weight rows (show/hide)
-  showRow(container, '#r-brk1',      '#r-brk1-val',       d.breaker_top_weight_kg,      d.breaker_top_weight_kg      > 0 ? _pm(d.breaker_top_weight_kg)      : '—', '#r-brk1-per-m');
-  showRow(container, '#r-brk1-skim', '#r-brk1-skim-val',  d.breaker_top_skim_weight_kg, d.breaker_top_skim_weight_kg > 0 ? _pm(d.breaker_top_skim_weight_kg) : '—', '#r-brk1-skim-per-m');
-  showRow(container, '#r-brk2',      '#r-brk2-val',       d.breaker_bot_weight_kg,      d.breaker_bot_weight_kg      > 0 ? _pm(d.breaker_bot_weight_kg)      : '—', '#r-brk2-per-m');
-  showRow(container, '#r-brk2-skim', '#r-brk2-skim-val',  d.breaker_bot_skim_weight_kg, d.breaker_bot_skim_weight_kg > 0 ? _pm(d.breaker_bot_skim_weight_kg) : '—', '#r-brk2-skim-per-m');
-
-  // Cost rows
-  setText(container, '#r-cover-cost',          formatRupees(c.top_cover_cost + c.bottom_cover_cost));
-  setText(container, '#r-cover-cost-per-m',    c.cover_cost_per_m    > 0 ? formatRupees(c.cover_cost_per_m)    + '/m' : '—');
-  setText(container, '#r-fabric-cost',         formatRupees(c.fabric_cost));
-  setText(container, '#r-fabric-cost-per-m',   c.fabric_cost_per_m   > 0 ? formatRupees(c.fabric_cost_per_m)   + '/m' : '—');
-  setText(container, '#r-skim-cost',           formatRupees(c.skim_cost));
-  setText(container, '#r-skim-cost-per-m',     c.skim_cost_per_m     > 0 ? formatRupees(c.skim_cost_per_m)     + '/m' : '—');
+  setText(container, '#r-cover-cost',      formatRupees(c.top_cover_cost + c.bottom_cover_cost));
+  setText(container, '#r-cover-cost-per-m', c.cover_cost_per_m > 0 ? formatRupees(c.cover_cost_per_m) + '/m' : '—');
+  setText(container, '#r-fabric-cost',     formatRupees(c.fabric_cost));
+  setText(container, '#r-fabric-cost-per-m', c.fabric_cost_per_m > 0 ? formatRupees(c.fabric_cost_per_m) + '/m' : '—');
+  setText(container, '#r-skim-cost',       formatRupees(c.skim_cost));
+  setText(container, '#r-skim-cost-per-m', c.skim_cost_per_m > 0 ? formatRupees(c.skim_cost_per_m) + '/m' : '—');
   setText(container, '#r-compound-cost-val',   formatRupees(c.total_compound_cost));
   setText(container, '#r-compound-cost-per-m', c.compound_cost_per_m > 0 ? formatRupees(c.compound_cost_per_m) + '/m' : '—');
-  setText(container, '#r-cop-cost',            formatRupees(c.cost_of_production));
-  showCostRow(container, '#r-expenses-row', '#r-expenses-cost', c.expenses_cost);
-  setText(container, '#r-packing-cost',        formatRupees(c.packing_cost));
-  setText(container, '#r-freight-cost',        formatRupees(c.freight_cost));
-  setText(container, '#r-freight-cost-per-m',  c.freight_cost_per_m  > 0 ? formatRupees(c.freight_cost_per_m)  + '/m' : '—');
-  setText(container, '#r-total-cost',          formatRupees(c.total_belt_cost));
+  setText(container, '#r-cop-cost',        formatRupees(c.cost_of_production));
+  setText(container, '#r-packing-cost',    formatRupees(c.packing_cost));
+  setText(container, '#r-freight-cost',    formatRupees(c.freight_cost));
+  setText(container, '#r-freight-cost-per-m', c.freight_cost_per_m > 0 ? formatRupees(c.freight_cost_per_m) + '/m' : '—');
+  setText(container, '#r-total-cost',      formatRupees(c.total_belt_cost));
   const pricePerKg = d.total_belt_weight_kg > 0 ? c.total_belt_cost / d.total_belt_weight_kg : null;
   setText(container, '#r-price-per-kg', pricePerKg != null ? formatRupees(pricePerKg) + ' / kg' : '—');
-  showCostRow(container, '#r-brk1-cost-row',      '#r-brk1-cost',      c.breaker_top_cost);
-  showCostRow(container, '#r-brk1-skim-cost-row', '#r-brk1-skim-cost', c.breaker_top_skim_cost);
-  showCostRow(container, '#r-brk2-cost-row',      '#r-brk2-cost',      c.breaker_bot_cost);
-  showCostRow(container, '#r-brk2-skim-cost-row', '#r-brk2-skim-cost', c.breaker_bot_skim_cost);
-
-  // Pricing
-  setText(container, '#r-rmc',       formatRupees(p.rmc_per_meter) + ' / m');
-  setText(container, '#r-gp',        formatRupees(p.gp_value_cd));
-  setText(container, '#r-gp-vd',     formatRupees(p.gp_value_vd));
-  setText(container, '#r-cd-total',  formatRupees(p.cd_total));
-  setText(container, '#r-cd-per-m',  formatRupees(p.cd_price_per_meter) + ' / m');
-  setText(container, '#r-vd-total',  formatRupees(p.vd_total));
-  setText(container, '#r-vd-per-m',  formatRupees(p.vd_price_per_meter) + ' / m');
-
-  // Per-mm price and USD prices
-  const widthMm = Number(result.inputs?.width_mm ?? 0);
+  setText(container, '#r-brk1-cost',    formatRupees(c.breaker_top_cost));
+  setText(container, '#r-brk1-skim-cost', formatRupees(c.breaker_top_skim_cost));
+  setText(container, '#r-brk2-cost',    formatRupees(c.breaker_bot_cost));
+  setText(container, '#r-brk2-skim-cost', formatRupees(c.breaker_bot_skim_cost));
+  setText(container, '#r-rmc',          formatRupees(p.rmc_per_meter) + ' / m');
+  setText(container, '#r-gp',           formatRupees(p.gp_value_cd));
+  setText(container, '#r-gp-vd',        formatRupees(p.gp_value_vd));
+  setText(container, '#r-cd-total',     formatRupees(p.cd_total));
+  setText(container, '#r-cd-per-m',     formatRupees(p.cd_price_per_meter) + ' / m');
+  setText(container, '#r-vd-total',     formatRupees(p.vd_total));
+  setText(container, '#r-vd-per-m',     formatRupees(p.vd_price_per_meter) + ' / m');
+  const widthMm = Number(inp?.width_mm ?? 0);
   if (widthMm > 0) {
     setText(container, '#r-cd-per-mm', formatRupees(p.cd_price_per_meter / widthMm) + ' / m / mm');
     setText(container, '#r-vd-per-mm', p.per_mm_vd_price != null ? formatRupees(p.per_mm_vd_price) + ' / m / mm' : '—');
-  } else {
-    setText(container, '#r-cd-per-mm', '—');
-    setText(container, '#r-vd-per-mm', '—');
   }
-  setText(container, '#r-rmc-with-gp',      p.rmc_with_gp_per_m         != null ? formatRupees(p.rmc_with_gp_per_m) + ' / m'         : '—');
-  setText(container, '#r-min-quot-rmc',     p.min_quotation_rmc_per_m   != null ? formatRupees(p.min_quotation_rmc_per_m) + ' / m'   : '—');
-  setText(container, '#r-per-mm-running',   p.per_mm_running_price_pre_quote != null ? formatRupees(p.per_mm_running_price_pre_quote) + ' / mm' : '—');
+  setText(container, '#r-rmc-with-gp',   p.rmc_with_gp_per_m != null ? formatRupees(p.rmc_with_gp_per_m) + ' / m' : '—');
+  setText(container, '#r-min-quot-rmc',  p.min_quotation_rmc_per_m != null ? formatRupees(p.min_quotation_rmc_per_m) + ' / m' : '—');
+  setText(container, '#r-per-mm-running', p.per_mm_running_price_pre_quote != null ? formatRupees(p.per_mm_running_price_pre_quote) + ' / mm' : '—');
   setText(container, '#r-total-rmc-amount', formatRupees(c.total_belt_cost));
-  setText(container, '#r-total-rmc-vd',     formatRupees(c.material_cost));
-  setText(container, '#r-rmc-usd',  p.rmc_usd  != null ? `$${p.rmc_usd.toFixed(2)} / m`  : 'N/A — set exchange rate');
-  setText(container, '#r-cd-usd',   p.quotation_usd != null ? `$${p.quotation_usd.toFixed(2)} / m` : 'N/A — set exchange rate');
-
-
-  // Calculation breakdown chips (Calc tab)
-  const ccPanel = container.querySelector('#cc-breakdown-panel');
-  if (ccPanel) {
-    const s = result.snapshot ?? {};
-    setText(container, '#cc-width',    d.effective_width_m  != null ? `${(d.effective_width_m * 1000).toFixed(1)} mm` : '—');
-    setText(container, '#cc-length',   d.effective_length_m != null ? d.effective_length_m.toFixed(3) + ' m' : '—');
-    setText(container, '#cc-belt-wt',  d.weight_per_meter_kg != null ? formatKg(d.weight_per_meter_kg) + ' / m' : '—');
-    setText(container, '#cc-len-per-ply', d.effective_length_m != null ? d.effective_length_m.toFixed(3) + ' m' : '—');
-    setText(container, '#cc-fab-gsm',  s.fabric?.gsm != null ? s.fabric.gsm.toFixed(1) + ' g/m²' : '—');
-    setText(container, '#cc-fab-price', s.fabric?.price_per_kg != null ? formatRupees(s.fabric.price_per_kg) + ' / kg' : '—');
-    setText(container, '#cc-fab-weight', d.fabric_weight_kg != null ? formatKg(d.fabric_weight_kg) : '—');
-    setText(container, '#cc-fab-cost',  c.fabric_cost  != null ? formatRupees(c.fabric_cost)  : '—');
-    setText(container, '#cc-brk-length', d.effective_length_m != null ? d.effective_length_m.toFixed(3) + ' m' : '—');
-    setText(container, '#cc-cmpd-wt',   d.compound_weight_kg != null ? formatKg(d.compound_weight_kg)  : '—');
-    const totalCoverWt = (d.top_cover_weight_kg ?? 0) + (d.bottom_cover_weight_kg ?? 0);
-    setText(container, '#cc-total-cover-wt', totalCoverWt > 0 ? formatKg(totalCoverWt) : '—');
-    setText(container, '#cc-skim-wt',    d.skim_weight_kg != null ? formatKg(d.skim_weight_kg) : '—');
-    setText(container, '#cc-cover-cost', c.top_cover_cost != null && c.bottom_cover_cost != null ? formatRupees(c.top_cover_cost + c.bottom_cover_cost) : '—');
-    setText(container, '#cc-skim-cost-chip', c.skim_cost != null ? formatRupees(c.skim_cost) : '—');
-    setText(container, '#cc-total-cmpd-cost', c.total_compound_cost != null ? formatRupees(c.total_compound_cost) : '—');
-    setText(container, '#cc-fab-brk-cost', c.fabric_plus_breaker_cost != null ? formatRupees(c.fabric_plus_breaker_cost) : '—');
-    setText(container, '#cc-min-price',  p.rmc_per_meter != null ? formatRupees(p.rmc_per_meter) + ' / m' : '—');
-
-    const hasBrk = d.breaker_top_weight_kg > 0 || d.breaker_bot_weight_kg > 0;
-    const brkGrp = container.querySelector('#cc-brk-group');
-    if (brkGrp) brkGrp.style.display = hasBrk ? 'block' : 'none';
-
-    const showCC = (chipId, valId, formatted) => {
-      const chip = container.querySelector(chipId);
-      const show = formatted != null;
-      if (chip) chip.style.display = show ? 'flex' : 'none';
-      if (show) setText(container, valId, formatted);
-    };
-    const fmtGsm = v => v != null ? v.toFixed(1) + ' g/m²' : null;
-    const fmtWt  = v => v != null && v > 0 ? formatKg(v) : null;
-    const fmtRt  = v => v != null ? formatRupees(v) + ' / kg' : null;
-    showCC('#cc-bot-chip',       '#cc-bot-gsm',    fmtGsm(s.breaker_top?.gsm));
-    showCC('#cc-bot-price-chip', '#cc-bot-price',  fmtRt(s.breaker_top?.price_per_kg));
-    showCC('#cc-bot-wt-chip',    '#cc-bot-fab-wt', fmtWt(d.breaker_top_weight_kg));
-    showCC('#cc-bob-chip',       '#cc-bob-gsm',    fmtGsm(s.breaker_bot?.gsm));
-    showCC('#cc-bob-price-chip', '#cc-bob-price',  fmtRt(s.breaker_bot?.price_per_kg));
-    showCC('#cc-bob-wt-chip',    '#cc-bob-fab-wt', fmtWt(d.breaker_bot_weight_kg));
-  }
+  setText(container, '#r-total-rmc-vd',  formatRupees(c.material_cost));
+  setText(container, '#r-rmc-usd',       p.rmc_usd != null ? `$${p.rmc_usd.toFixed(2)} / m` : 'N/A — set exchange rate');
+  setText(container, '#r-cd-usd',        p.quotation_usd != null ? `$${p.quotation_usd.toFixed(2)} / m` : 'N/A — set exchange rate');
+  setText(container, '#cc-width',        d.effective_width_m != null ? `${(d.effective_width_m * 1000).toFixed(1)} mm` : '—');
+  setText(container, '#cc-length',       d.effective_length_m != null ? d.effective_length_m.toFixed(3) + ' m' : '—');
+  setText(container, '#cc-belt-wt',      d.weight_per_meter_kg != null ? formatKg(d.weight_per_meter_kg) + ' / m' : '—');
+  setText(container, '#cc-len-per-ply',  d.effective_length_m != null ? d.effective_length_m.toFixed(3) + ' m' : '—');
+  setText(container, '#cc-fab-gsm',      s.fabric?.gsm != null ? s.fabric.gsm.toFixed(1) + ' g/m²' : '—');
+  setText(container, '#cc-fab-price',    s.fabric?.price_per_kg != null ? formatRupees(s.fabric.price_per_kg) + ' / kg' : '—');
+  setText(container, '#cc-fab-weight',   d.fabric_weight_kg != null ? formatKg(d.fabric_weight_kg) : '—');
+  setText(container, '#cc-fab-cost',     c.fabric_cost != null ? formatRupees(c.fabric_cost) : '—');
+  setText(container, '#cc-brk-length',   d.effective_length_m != null ? d.effective_length_m.toFixed(3) + ' m' : '—');
+  setText(container, '#cc-cmpd-wt',      d.compound_weight_kg != null ? formatKg(d.compound_weight_kg) : '—');
+  setText(container, '#cc-total-cover-wt', ((d.top_cover_weight_kg ?? 0) + (d.bottom_cover_weight_kg ?? 0)) > 0 ? formatKg((d.top_cover_weight_kg ?? 0) + (d.bottom_cover_weight_kg ?? 0)) : '—');
+  setText(container, '#cc-skim-wt',      d.skim_weight_kg != null ? formatKg(d.skim_weight_kg) : '—');
+  setText(container, '#cc-cover-cost',   c.top_cover_cost != null && c.bottom_cover_cost != null ? formatRupees(c.top_cover_cost + c.bottom_cover_cost) : '—');
+  setText(container, '#cc-skim-cost-chip', c.skim_cost != null ? formatRupees(c.skim_cost) : '—');
+  setText(container, '#cc-total-cmpd-cost', c.total_compound_cost != null ? formatRupees(c.total_compound_cost) : '—');
+  setText(container, '#cc-fab-brk-cost', c.fabric_plus_breaker_cost != null ? formatRupees(c.fabric_plus_breaker_cost) : '—');
+  setText(container, '#cc-min-price',    p.rmc_per_meter != null ? formatRupees(p.rmc_per_meter) + ' / m' : '—');
+  setText(container, '#cc-bot-gsm',      s.breaker_top?.gsm != null ? s.breaker_top.gsm.toFixed(1) + ' g/m²' : '—');
+  setText(container, '#cc-bot-price',    s.breaker_top?.price_per_kg != null ? formatRupees(s.breaker_top.price_per_kg) + ' / kg' : '—');
+  setText(container, '#cc-bot-fab-wt',   d.breaker_top_weight_kg > 0 ? formatKg(d.breaker_top_weight_kg) : '—');
+  setText(container, '#cc-bob-gsm',      s.breaker_bot?.gsm != null ? s.breaker_bot.gsm.toFixed(1) + ' g/m²' : '—');
+  setText(container, '#cc-bob-price',    s.breaker_bot?.price_per_kg != null ? formatRupees(s.breaker_bot.price_per_kg) + ' / kg' : '—');
+  setText(container, '#cc-bob-fab-wt',   d.breaker_bot_weight_kg > 0 ? formatKg(d.breaker_bot_weight_kg) : '—');
 
   renderDetailedFields(container, result);
   updateDiscountResults(container, result);
@@ -1968,6 +2060,7 @@ function renderDetailedFields(container, result) {
     row('Cost of Production (total)', c.cost_of_production != null ? formatRupees(c.cost_of_production) : '—'),
     row('COP / Meter', c.cop_per_m != null ? formatRupees(c.cop_per_m) + ' / m' : '—'),
     row('Crate / Packing Cost / Meter', c.crate_cost_per_m != null ? formatRupees(c.crate_cost_per_m) + ' / m' : '—'),
+    row('Reel Cost / Meter', c.reel_cost_per_m != null && c.reel_cost_per_m > 0 ? formatRupees(c.reel_cost_per_m) + ' / m' : '—'),
     row('Freight Cost (total)', c.freight_cost != null ? formatRupees(c.freight_cost) : '—'),
     row('Total Belt Cost', c.total_belt_cost != null ? formatRupees(c.total_belt_cost) : '—'),
 
@@ -2036,6 +2129,41 @@ function showCostRow(container, rowId, valId, value) {
 function setText(container, sel, text) {
   const el = container.querySelector(sel);
   if (el) el.textContent = text;
+}
+
+// ─── Send for Approval modal ──────────────────────────────────────────────────
+
+function _showApprovalModal(container, quotation) {
+  const existing = container.querySelector('#approval-modal');
+  if (existing) existing.remove();
+
+  const q = quotation ?? {};
+  const refLabel = q.id ? `Ref: ${q.id}` : 'unsaved draft';
+
+  const overlay = document.createElement('div');
+  overlay.id = 'approval-modal';
+  overlay.style.cssText = `
+    position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;
+    display:flex;align-items:center;justify-content:center;
+  `;
+
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:8px;padding:28px 32px;width:380px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.25);">
+      <h3 style="margin:0 0 8px;font-size:16px;font-weight:700;">Send for Approval</h3>
+      <p style="margin:0 0 16px;font-size:13px;color:#555;">${refLabel}</p>
+      <div style="background:#fef9e7;border:1px solid #f0c040;border-radius:6px;padding:12px 14px;font-size:13px;color:#7a6000;margin-bottom:20px;">
+        <strong>Coming soon</strong> — approver email address is not yet configured.<br>
+        Once configured, this will send the PDF quotation to the approver inbox.
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn btn-outline" id="approval-close">Close</button>
+      </div>
+    </div>
+  `;
+
+  container.appendChild(overlay);
+  overlay.querySelector('#approval-close').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 }
 
 // ─── Events ────────────────────────────────────────────────────────────────────
@@ -2250,6 +2378,9 @@ function setupEvents(container, quotation, isRevise) {
   // Packing type → update packing cost display
   container.querySelector('[name="packing_type_id"]')?.addEventListener('change', () => updateDerivedDisplays(container, null));
 
+  // Reel type → update reel cost display
+  container.querySelector('[name="reel_type_id"]')?.addEventListener('change', () => updateDerivedDisplays(container, null));
+
   // Freight destination → auto-fill rate
   container.querySelector('[name="freight_id"]')?.addEventListener('change', e => {
     const row = getLiveFreight().find(r => r.id === e.target.value);
@@ -2376,9 +2507,16 @@ function setupEvents(container, quotation, isRevise) {
     window.dispatchEvent(new CustomEvent('ravasco:navigate', { detail: { view: 'quotations' } }));
   });
   container.querySelector('#btn-pdf')?.addEventListener('click', () => {
+    if (!_currentResult) { showToast('No calculation result found — fill in all required fields first.'); return; }
+    openPrintWindow(_currentQuotation, _currentResult);
+  });
+  container.querySelector('#btn-approve')?.addEventListener('click', () => {
+    if (!_currentResult) { showToast('Complete all required fields first — results update live.'); return; }
+    _showApprovalModal(container, _currentQuotation);
+  });
+  container.querySelector('#btn-email')?.addEventListener('click', () => {
     if (!_currentResult) { showToast('No calculation result found — open the quotation and recalculate first.'); return; }
-    const ok = openPrintWindow(_currentQuotation, _currentResult);
-    if (!ok) showToast('PDF blocked by browser — allow pop-ups for this site, then try again.');
+    openEmailModal(_currentQuotation, _currentResult);
   });
   container.querySelector('#btn-revise-btn')?.addEventListener('click', () => {
     window.dispatchEvent(new CustomEvent('ravasco:navigate', { detail: { view: 'quotations', action: 'revise', id: _currentQuotation?.id } }));
@@ -2411,9 +2549,7 @@ function saveQuotation(container, quotation, status, isRevise) {
   }
 
   const existingId = quotation?.id;
-  const qtnId = isRevise
-    ? revisionId(existingId.replace(/-R\d+$/, ''), (existingId.match(/-R(\d+)$/) ? parseInt(existingId.match(/-R(\d+)$/)[1]) + 1 : 1))
-    : existingId ?? nextQuotationId();
+  const qtnId = existingId ?? nextQuotationId();
 
   const record = {
     id:           qtnId,
@@ -2457,7 +2593,7 @@ function markOutcome(quotation, outcome) {
 
 function lockForm(container) {
   container.querySelectorAll('select, input, button').forEach(el => {
-    if (['btn-back', 'btn-revise-btn', 'btn-pdf', 'btn-won', 'btn-lost'].includes(el.id)) return;
+    if (['btn-back', 'btn-revise-btn', 'btn-pdf', 'btn-email', 'btn-won', 'btn-lost'].includes(el.id)) return;
     if (el.classList.contains('qf-bd-tab')) return;
     if (el.classList.contains('qf-step')) return;
     if (el.closest('.qf-phase-head')) return;

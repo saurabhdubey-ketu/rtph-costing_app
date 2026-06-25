@@ -101,6 +101,10 @@ export function runEngine(line, overrides = {}) {
   const skimCmpd = mustFind(COMPOUND_MASTER, r => r.id === line.skim_compound_id,         `skim_compound_id=${line.skim_compound_id}`);
 
   const packingRow = mustFind(REEL_PACKING_MASTER, r => r.id === line.reel_packing_id, `reel_packing_id=${line.reel_packing_id}`);
+  // Reel type is optional — distinct from packing/crating. Costed separately when present.
+  const reelRow = line.reel_type_id
+    ? mustFind(REEL_PACKING_MASTER, r => r.id === line.reel_type_id, `reel_type_id=${line.reel_type_id}`)
+    : null;
 
   // Freight — optional (freight_included = false skips freight cost).
   // Destination is also optional — a manually-entered freight_cost_override works without one.
@@ -129,7 +133,7 @@ export function runEngine(line, overrides = {}) {
   const rate_skim      = overrides.skim_rate            ?? skimCmpd.price_per_kg;
   const eff_fabric_price = overrides.fabric_price      ?? fabric_price_per_kg;
   const eff_fabric_gsm = (overrides.fabric_gsm > 0) ? overrides.fabric_gsm : fabric_gsm_master;
-  const extra_cop      = overrides.expenses_per_kg     ?? 20;
+  const extra_cop      = overrides.expenses_per_kg     ?? GP_MASTER.expenses_per_kg_default ?? 0;
   const eff_carcass_mm = overrides.carcass_thickness_mm ?? fabricRow.nominal_carcass_thickness_mm;
 
   // ── 2. Effective width and length ──────────────────────────────────────────
@@ -250,9 +254,13 @@ export function runEngine(line, overrides = {}) {
   const exchange_rate_val = Number(line.exchange_rate) || 0;
 
   const eff_cop_rate   = line.cop_rate_per_kg ?? beltType.cost_of_production_rate_per_kg ?? 0;
+  if (!(eff_cop_rate > 0)) {
+    warnings.push(`COP rate is 0 — neither line override nor belt type "${beltType.code}" master has a value. Cost of Production will be ₹0.`);
+  }
   const cop            = costOfProduction(eff_cop_rate, total_belt_weight);
   const expenses_cost  = extra_cop * total_belt_weight;
   const packing = packingCost(packingRow.packing_cost_per_meter, total_length_m);
+  const reel_cost = reelRow ? packingCost(reelRow.packing_cost_per_meter, total_length_m) : 0;
 
   const freight_rate      = line.freight_cost_override ?? freightRow?.rate_per_kg ?? 0;
   const freight_cost_type = line.freight_cost_type ?? 'KG';
@@ -260,8 +268,9 @@ export function runEngine(line, overrides = {}) {
     ? freightCost(freight_rate, freight_cost_type, total_belt_weight, total_length_m, w_eff, l_eff)
     : 0;
 
-  const total_cost = totalBeltCost(mat_cost, cop, expenses_cost, packing, freight);
+  const total_cost = totalBeltCost(mat_cost, cop, expenses_cost, packing + reel_cost, freight);
   const rmc        = rmcPerMeter(total_cost, total_length_m);
+  const wt_per_m   = total_length_m > 0 ? total_belt_weight / total_length_m : 0;
 
   // ── 5. Pricing ─────────────────────────────────────────────────────────────
   const cd_price = cdPricePerMeter(total_cost, gp_pct, total_length_m);
@@ -301,6 +310,7 @@ export function runEngine(line, overrides = {}) {
     breaker_bot_skim: brkBotSkimCmpd ? { id: brkBotSkimCmpd.id, code: brkBotSkimCmpd.code, price_per_kg: brkBotSkimCmpd.price_per_kg } : null,
     edge:           { id: edgeRow.id,    name: edgeRow.name,    width_wastage_mm: edgeRow.width_wastage_mm },
     packing:        { id: packingRow.id, code: packingRow.code, packing_cost_per_meter: packingRow.packing_cost_per_meter },
+    reel:           reelRow ? { id: reelRow.id, code: reelRow.code, packing_cost_per_meter: reelRow.packing_cost_per_meter } : null,
     freight:        freightRow
       ? { id: freightRow.id, state_name: freightRow.state_name, rate_per_kg: freight_rate, cost_type: freight_cost_type }
       : (freightIncluded && freight_rate > 0 ? { state_name: 'Manual entry', rate_per_kg: freight_rate, cost_type: freight_cost_type } : null),
@@ -355,6 +365,13 @@ export function runEngine(line, overrides = {}) {
       bottom_cover_weight_per_m: total_length_m > 0 ? bot_cover_weight / total_length_m : 0,
       breaker_weight_per_m:      total_length_m > 0 ? (brk_top_fabric_wt + brk_top_skim_wt + brk_bot_fabric_wt + brk_bot_skim_wt) / total_length_m : 0,
       skim_weight_per_m:         total_length_m > 0 ? skim_weight_kg / total_length_m : 0,
+      bot_weight_kg:             brk_top_fabric_wt + brk_top_skim_wt,
+      bob_weight_kg:             brk_bot_fabric_wt + brk_bot_skim_wt,
+      bot_weight_per_m:          total_length_m > 0 ? (brk_top_fabric_wt + brk_top_skim_wt) / total_length_m : 0,
+      bob_weight_per_m:          total_length_m > 0 ? (brk_bot_fabric_wt + brk_bot_skim_wt) / total_length_m : 0,
+      fabric_compound_weight_kg: top_cover_weight + bot_cover_weight + skim_weight_kg,
+      fabric_compound_weight_per_m: total_length_m > 0 ? (top_cover_weight + bot_cover_weight + skim_weight_kg) / total_length_m : 0,
+      actual_weight_per_m_blended: actual_wt_per_m_val,
     },
     costs: {
       top_cover_cost,
@@ -370,6 +387,8 @@ export function runEngine(line, overrides = {}) {
       cost_of_production:   cop,
       expenses_cost,
       packing_cost:         packing,
+      reel_cost:            reel_cost,
+      reel_cost_per_m:      total_length_m > 0 ? reel_cost / total_length_m : 0,
       freight_cost:         freight,
       total_belt_cost:      total_cost,
       total_compound_cost:          total_compound_cost_val,
@@ -385,6 +404,16 @@ export function runEngine(line, overrides = {}) {
       skim_cost_per_m:              total_length_m > 0 ? skim_cost / total_length_m : 0,
       compound_cost_per_m:          total_length_m > 0 ? total_compound_cost_val / total_length_m : 0,
       freight_cost_per_m:           total_length_m > 0 ? freight / total_length_m : 0,
+      top_cover_cost_per_m:         total_length_m > 0 ? top_cover_cost / total_length_m : 0,
+      bottom_cover_cost_per_m:      total_length_m > 0 ? bot_cover_cost / total_length_m : 0,
+      breaker_top_total_cost:       brk_top_cost + brk_top_sk_cost,
+      breaker_bot_total_cost:       brk_bot_cost + brk_bot_sk_cost,
+      breaker_top_cost_per_m:       total_length_m > 0 ? (brk_top_cost + brk_top_sk_cost) / total_length_m : 0,
+      breaker_bot_cost_per_m:       total_length_m > 0 ? (brk_bot_cost + brk_bot_sk_cost) / total_length_m : 0,
+      fabric_compound_cost:         top_cover_cost + bot_cover_cost + skim_cost,
+      fabric_compound_cost_per_m:   total_length_m > 0 ? (top_cover_cost + bot_cover_cost + skim_cost) / total_length_m : 0,
+      actual_material_cost:         width_factor_val * length_factor_val > 0 ? mat_cost / (width_factor_val * length_factor_val) : mat_cost,
+      actual_material_cost_per_m:   total_length_m > 0 && width_factor_val * length_factor_val > 0 ? (mat_cost / (width_factor_val * length_factor_val)) / total_length_m : 0,
     },
     pricing: {
       rmc_per_meter:          rmc,
@@ -412,6 +441,20 @@ export function runEngine(line, overrides = {}) {
       quotation_vd_usd:       exchange_rate_val > 0 ? vd_price / exchange_rate_val : null,
       rmc_usd:                exchange_rate_val > 0 ? rmc / exchange_rate_val : null,
       exchange_rate:          exchange_rate_val,
+      rmc_per_kg:             wt_per_m > 0 ? rmc / wt_per_m : 0,
+      material_cost_per_m:    total_length_m > 0 ? mat_cost / total_length_m : 0,
+      material_cost_per_kg:   wt_per_m > 0 ? (total_length_m > 0 ? mat_cost / total_length_m : 0) / wt_per_m : 0,
+      cd_price_per_kg:        wt_per_m > 0 ? cd_price / wt_per_m : 0,
+      vd_price_per_kg:        wt_per_m > 0 ? vd_price / wt_per_m : 0,
+      crate_cost_total:       packing,
+      crate_cost_per_m:       total_length_m > 0 ? packing / total_length_m : 0,
+      crate_cost_per_kg:      wt_per_m > 0 && total_length_m > 0 ? (packing / total_length_m) / wt_per_m : 0,
+      reel_cost_total:        reel_cost,
+      reel_cost_per_m:        total_length_m > 0 ? reel_cost / total_length_m : 0,
+      reel_cost_per_kg:       wt_per_m > 0 && total_length_m > 0 ? (reel_cost / total_length_m) / wt_per_m : 0,
+      freight_cost_total:     freight,
+      freight_cost_per_kg:    wt_per_m > 0 && total_length_m > 0 ? (freight / total_length_m) / wt_per_m : 0,
+      total_rmc_cost:         total_cost,
     },
     snapshot,
     warnings,

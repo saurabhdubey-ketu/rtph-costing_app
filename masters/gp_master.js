@@ -13,11 +13,14 @@ export const GP_MASTER = Object.freeze({
     { id: 'GP-GOVT', label: 'Government (22%)',gp_pct: 0.22, active: true },
   ],
   min_gp_pct: 0.20,  // approval-gate threshold — warn if effective GP% drops below 20%
+  expenses_per_kg_default: 20,  // ₹/kg default loaded into Expense per KG when not entered
   override_bounds: {
-    sg_top:         { min: 0.80, max: 2.00 },
-    sg_bottom:      { min: 0.80, max: 2.00 },
-    cover_rate_top: { min: 1.00, max: 1000.00 },
+    sg_top:            { min: 0.80, max: 2.00 },
+    sg_bottom:         { min: 0.80, max: 2.00 },
+    cover_rate_top:    { min: 1.00, max: 1000.00 },
     cover_rate_bottom: { min: 1.00, max: 1000.00 },
-    tbt:            { min: 1.00, max: 10000.00 },
+    tbt:               { min: 1.00, max: 10000.00 },
+    expenses_per_kg:   { min: 0,    max: 200 },
+    cop_rate_per_kg:   { min: 0,    max: 500 },
   },
 });

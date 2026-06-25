@@ -13,3 +13,10 @@ Thumbs.db
 desktop.ini
 .vscode/
 *.swp
+
+# Node
+node_modules/
+package-lock.json
+
+# Runtime data (local DB, not source)
+data/

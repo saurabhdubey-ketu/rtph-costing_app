@@ -51,12 +51,58 @@
   <div id="toast-container"></div>
 
   <script type="module">
-    import { renderDashboard }      from './modules/dashboard.js';
-    import { renderCustomers }      from './modules/customers.js';
-    import { renderEnquiries }      from './modules/enquiries.js';
-    import { renderQuotations }     from './modules/quotations.js';
-    import { renderQuotationForm }  from './modules/quotation_form.js';
-    import { renderMastersAdmin }   from './modules/masters_admin.js';
+    // ── Startup: sync db.json → localStorage (must complete before modules load) ──
+    async function syncFromServer() {
+      try {
+        const res = await fetch('/api/data');
+        if (!res.ok) return;
+        const serverData = await res.json();
+
+        if (Object.keys(serverData).length === 0) {
+          // Server has no data yet — push existing localStorage to server (one-time migration)
+          const local = {};
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith('ravasco.')) {
+              try { local[k] = JSON.parse(localStorage.getItem(k)); } catch {}
+            }
+          }
+          if (Object.keys(local).length > 0) {
+            await fetch('/api/data/bulk', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(local),
+            }).catch(() => {});
+          }
+        } else {
+          // Server has data — load it into localStorage (overrides any stale port-local data)
+          for (const [key, value] of Object.entries(serverData)) {
+            localStorage.setItem(key, JSON.stringify(value));
+          }
+        }
+      } catch {
+        // Server unreachable — silently continue with localStorage only
+      }
+    }
+
+    await syncFromServer();
+
+    // ── Dynamic imports (after sync so module-level code sees the right data) ──
+    const [
+      { renderDashboard },
+      { renderCustomers },
+      { renderEnquiries },
+      { renderQuotations },
+      { renderQuotationForm },
+      { renderMastersAdmin },
+    ] = await Promise.all([
+      import('./modules/dashboard.js'),
+      import('./modules/customers.js'),
+      import('./modules/enquiries.js'),
+      import('./modules/quotations.js'),
+      import('./modules/quotation_form.js'),
+      import('./modules/masters_admin.js'),
+    ]);
 
     // ── Router ─────────────────────────────────────────────────────────────
     const container = document.getElementById('view-container');

@@ -536,8 +536,17 @@ function showCustomerForm(id, focusLocId) {
         address: null, postal_code: null, locations: locs };
     }
 
+    if (isNew) {
+      const ok = confirm(
+        `Add "${name}" to the customer masters?\n\n` +
+        `This will make the customer available across all enquiries and quotations.\n\n` +
+        `OK = Yes, add to masters    Cancel = Discard`
+      );
+      if (!ok) return;
+    }
+
     const record = saveCustomer(payload);
-    showToast(isNew ? `Customer ${record.id} created.` : 'Customer saved.');
+    showToast(isNew ? `Customer ${record.id} created and added to masters.` : 'Customer saved.');
     area.innerHTML = '';
     renderCustomerTable();
   });
