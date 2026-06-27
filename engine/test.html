@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Ravasco CDS — Engine Test Harness</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 2rem; background: #f4f6f8; }
+    h1 { color: #0F2A44; }
+    .suite { background: white; border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    .test { display: flex; align-items: flex-start; gap: 1rem; padding: .5rem 0; border-bottom: 1px solid #eee; }
+    .test:last-child { border-bottom: none; }
+    .pass { color: #1a7a3e; font-weight: 600; }
+    .fail { color: #c00; font-weight: 600; }
+    .label { flex: 1; }
+    .detail { font-size: .85rem; color: #666; margin-top: .2rem; }
+    .summary { font-size: 1.1rem; font-weight: 600; margin-top: 1rem; }
+    .summary.all-pass { color: #1a7a3e; }
+    .summary.has-fail { color: #c00; }
+    table { width: 100%; border-collapse: collapse; margin-top: .5rem; }
+    th, td { text-align: left; padding: .3rem .5rem; border: 1px solid #ddd; font-size: .85rem; }
+    th { background: #f0f4f8; }
+    td.num { text-align: right; font-family: monospace; }
+    .warn { color: #b45309; }
+  </style>
+</head>
+<body>
+  <h1>Ravasco CDS — Engine Test Harness</h1>
+  <p>Oracle source: <code>CorrectedMultiplyBeltCosting.xlsx</code> via <code>build_corrected_excel.py</code>. All tests must pass before director review.</p>
+  <div id="output"></div>
+
+  <script type="module">
+    import { runEngine } from './engine.js';
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Oracle test case — Multiply with Breaker (1000mm, EP-1000/5, open-end)
+    // Inputs: Width=1000mm, EP-1000/5, Top=5mm M-24, Bottom=2mm M-24,
+    //         Skim=SK-FAB, Edge=Cut Edge, 5×200m, BRK-TOP (NN-III, 0.6mm),
+    //         BRK-BOT (STBR-III, 3mm), Jamshedpur freight, HDPE, GP=35%
+    // Oracle: weight=22868.76 kg, cost=₹33,39,183.16, RMC=₹3339.18/m,
+    //         CD=₹4507.90/m (before MROUND nearest 5), VD=₹4286.39/m
+    // ──────────────────────────────────────────────────────────────────────
+    const ORACLE_LINE = {
+      belt_type_id:               'BT-MULTIPLY-BRK',
+      width_id:                   'W-MM-1000',
+      length_per_roll_m:          200,
+      no_of_rolls:                5,
+      length_type:                'open_end',
+      edge_id:                    'EDGE-CE',
+      fabric_type:                'EP',
+      fabric_strength:            1000,
+      plies:                      5,
+      top_cover_compound_id:      'CMP-M24',
+      top_cover_thickness_mm:     5,
+      bottom_cover_compound_id:   'CMP-M24',
+      bottom_cover_thickness_mm:  2,
+      skim_compound_id:           'CMP-SKFAB',
+      breaker_top_id:             'BRK-TOP',
+      breaker_top_skim_compound_id: 'CMP-NNIII',
+      breaker_top_skim_thickness_mm: 0.6,
+      breaker_bot_id:             'BRK-BOT',
+      breaker_bot_skim_compound_id: 'CMP-STBRIII',
+      breaker_bot_skim_thickness_mm: 3,
+      reel_packing_id:            'RPK-HDPE',
+      freight_id:                 'FRT-JAMSHEDPUR',
+      gp_band_id:                 'GP-STD',
+      discount_pct:               0,
+    };
+
+    const TOLERANCE = 1.0; // ₹1 tolerance for floating-point
+
+    function near(actual, expected, tol = TOLERANCE) {
+      return Math.abs(actual - expected) <= tol;
+    }
+
+    function assert(label, actual, expected, unit = '', tol = TOLERANCE) {
+      const ok = near(actual, expected, tol);
+      return { label, actual, expected, unit, ok };
+    }
+
+    const results = [];
+
+    try {
+      const out = runEngine(ORACLE_LINE);
+      const d = out.derived;
+      const c = out.costs;
+      const p = out.pricing;
+
+      results.push(assert('Effective width',            d.effective_width_m,           1.030, 'm', 0.0001));
+      results.push(assert('Effective length',           d.effective_length_m,          1030,  'm', 0.001));
+      results.push(assert('Total belt weight',          d.total_belt_weight_kg,        22868.76, 'kg', 1.0));
+      results.push(assert('Material cost',              c.material_cost,               2706292,  '₹', 10));
+      results.push(assert('Cost of production',         c.cost_of_production,          503113,   '₹', 5));
+      results.push(assert('Packing cost',               c.packing_cost,                4000,     '₹', 1));
+      results.push(assert('Freight cost',               c.freight_cost,                125778,   '₹', 10));
+      results.push(assert('Total belt cost',            c.total_belt_cost,             3339183,  '₹', 5));
+      results.push(assert('RMC per meter',              p.rmc_per_meter,               3339.18,  '₹/m', 0.5));
+      // CD and VD use MROUND to nearest ₹5 — oracle pre-MROUND values are 4507.90 and 4286.39
+      results.push(assert('CD price per meter (MROUND)',p.cd_price_per_meter,          4510,     '₹/m', 5));
+      results.push(assert('VD price per meter (MROUND)',p.vd_price_per_meter,          4285,     '₹/m', 5));
+
+      // Individual component weight checks
+      results.push(assert('Top cover weight',   d.top_cover_weight_kg,     6259.31,  'kg', 1));
+      results.push(assert('Bottom cover weight',d.bottom_cover_weight_kg,  2503.72,  'kg', 1));
+      results.push(assert('Fabric weight',      d.fabric_weight_kg,        3500.97,  'kg', 1));
+      results.push(assert('Breaker top weight', d.breaker_top_weight_kg,   148.53,   'kg', 0.5));
+      results.push(assert('Breaker bot weight', d.breaker_bot_weight_kg,   689.47,   'kg', 1));
+
+    } catch (err) {
+      results.push({ label: 'Engine threw an exception', ok: false, actual: err.message, expected: '(no error)', unit: '' });
+    }
+
+    // ── No-breaker belt (BASE type) ──
+    const BASE_LINE = {
+      belt_type_id:               'BT-MULTIPLY',
+      width_id:                   'W-MM-1000',
+      length_per_roll_m:          200,
+      no_of_rolls:                5,
+      length_type:                'open_end',
+      edge_id:                    'EDGE-CE',
+      fabric_type:                'EP',
+      fabric_strength:            1000,
+      plies:                      5,
+      top_cover_compound_id:      'CMP-M24',
+      top_cover_thickness_mm:     5,
+      bottom_cover_compound_id:   'CMP-M24',
+      bottom_cover_thickness_mm:  2,
+      skim_compound_id:           'CMP-SKFAB',
+      reel_packing_id:            'RPK-HDPE',
+      freight_id:                 'FRT-JAMSHEDPUR',
+      gp_band_id:                 'GP-STD',
+      discount_pct:               0,
+    };
+
+    const baseResults = [];
+    try {
+      const out = runEngine(BASE_LINE);
+      baseResults.push(assert('Base belt: effective width', out.derived.effective_width_m, 1.030, 'm', 0.0001));
+      baseResults.push(assert('Base belt: no breaker weight', out.derived.breaker_top_weight_kg + out.derived.breaker_bot_weight_kg, 0, 'kg', 0.001));
+      baseResults.push(assert('Base belt: skim weight positive', out.derived.skim_weight_kg > 0 ? 1 : 0, 1, '', 0));
+      baseResults.push({ label: 'Base belt: no warnings about breaker', ok: !out.warnings.some(w => w.includes('breaker')), actual: out.warnings.join('; '), expected: '(no breaker warnings)', unit: '' });
+    } catch (err) {
+      baseResults.push({ label: 'Base belt engine error', ok: false, actual: err.message, expected: '(no error)', unit: '' });
+    }
+
+    // ── Moulded edge test (bug C8 fix) ──
+    const MOULDED_LINE = { ...ORACLE_LINE, edge_id: 'EDGE-MD', belt_type_id: 'BT-MULTIPLY' };
+    delete MOULDED_LINE.breaker_top_id;
+    delete MOULDED_LINE.breaker_bot_id;
+    const mouldedResults = [];
+    try {
+      const out = runEngine(MOULDED_LINE);
+      mouldedResults.push(assert('Moulded edge: W_eff = 1.000 (no wastage)', out.derived.effective_width_m, 1.000, 'm', 0.0001));
+    } catch (err) {
+      mouldedResults.push({ label: 'Moulded edge engine error', ok: false, actual: err.message, expected: '(no error)', unit: '' });
+    }
+
+    // ── Endless belt test (bug X2 fix) ──
+    const ENDLESS_LINE = {
+      belt_type_id:               'BT-ENDLESS',
+      width_id:                   'W-MM-1000',
+      length_per_roll_m:          100,
+      no_of_rolls:                1,
+      length_type:                'endless',
+      edge_id:                    'EDGE-MD',
+      fabric_type:                'EP',
+      fabric_strength:            1000,
+      plies:                      5,
+      top_cover_compound_id:      'CMP-M24',
+      top_cover_thickness_mm:     5,
+      bottom_cover_compound_id:   'CMP-M24',
+      bottom_cover_thickness_mm:  2,
+      skim_compound_id:           'CMP-SKFAB',
+      reel_packing_id:            'RPK-HDPE',
+      freight_id:                 'FRT-JAMSHEDPUR',
+      gp_band_id:                 'GP-STD',
+      discount_pct:               0,
+    };
+    const endlessResults = [];
+    try {
+      const out = runEngine(ENDLESS_LINE);
+      endlessResults.push(assert('Endless: L_eff = 100+3 = 103 m', out.derived.effective_length_m, 103, 'm', 0.001));
+      endlessResults.push(assert('Endless: total_length = 100 m (order length)', out.derived.total_length_m, 100, 'm', 0.001));
+    } catch (err) {
+      endlessResults.push({ label: 'Endless engine error', ok: false, actual: err.message, expected: '(no error)', unit: '' });
+    }
+
+    // ── Render ──
+    function renderSuite(title, tests) {
+      const passed = tests.filter(t => t.ok).length;
+      const total = tests.length;
+      const allPass = passed === total;
+      let html = `<div class="suite">
+        <h2>${title}</h2>
+        <table>
+          <tr><th>Test</th><th>Expected</th><th>Actual</th><th>Status</th></tr>`;
+      tests.forEach(t => {
+        const expectedStr = typeof t.expected === 'number' ? t.expected.toFixed(4) : t.expected;
+        const actualStr   = typeof t.actual   === 'number' ? t.actual.toFixed(4)   : t.actual;
+        html += `<tr>
+          <td class="label">${t.label} ${t.unit ? '<span style="color:#999">'+t.unit+'</span>' : ''}</td>
+          <td class="num">${expectedStr}</td>
+          <td class="num">${actualStr}</td>
+          <td class="${t.ok ? 'pass' : 'fail'}">${t.ok ? '✓ PASS' : '✗ FAIL'}</td>
+        </tr>`;
+      });
+      html += `</table>
+        <div class="summary ${allPass ? 'all-pass' : 'has-fail'}">${allPass ? '✓ All ' : `✗ ${total - passed} of `}${total} tests ${allPass ? 'passed' : 'failed'}</div>
+      </div>`;
+      return html;
+    }
+
+    document.getElementById('output').innerHTML =
+      renderSuite('Oracle: Multiply with Breaker (EP-1000/5, 1000mm, 1000m, GP=35%)', results) +
+      renderSuite('Base Belt (no breaker)', baseResults) +
+      renderSuite('Bug C8 Fix: Moulded Edge (zero width wastage)', mouldedResults) +
+      renderSuite('Bug X2 Fix: Endless Belt (splice +3m)', endlessResults);
+  </script>
+</body>
+</html>
