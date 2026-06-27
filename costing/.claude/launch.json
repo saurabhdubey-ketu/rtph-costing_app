@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ravasco-cds",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "ravasco-cds"],
+      "port": 3000,
+      "autoPort": true
+    }
+  ]
+}
