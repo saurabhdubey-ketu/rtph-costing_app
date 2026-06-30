@@ -54,12 +54,26 @@ export function getQuotationHTML(quotation, _legacyResult) {
   };
 }
 
+async function _inlineLogo(html) {
+  try {
+    const resp = await fetch('/assets/icons/indus_logo.png');
+    if (!resp.ok) return html;
+    const blob = await resp.blob();
+    return new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onload  = () => resolve(html.split('/assets/icons/indus_logo.png').join(reader.result));
+      reader.onerror = () => resolve(html);
+      reader.readAsDataURL(blob);
+    });
+  } catch { return html; }
+}
+
 export async function openPrintWindow(quotation, result) {
   if (!quotation || !result) return;
 
   const info = getQuotationHTML(quotation, result);
   if (!info) return;
-  const { html } = info;
+  const html = await _inlineLogo(info.html);
   const filename = quotation.id || 'Quotation';
 
   try {
@@ -127,9 +141,8 @@ body{font-family:'Trebuchet MS','Arial Narrow',Arial,sans-serif;font-size:10pt;c
 
 /* ── Brand header strip ── */
 .ph{display:flex;align-items:center;justify-content:space-between;gap:18px;border-bottom:2px solid #c2700e;padding:14px 20px}
-.ph-logo{width:130px;text-align:center;flex-shrink:0}
-.ph-logo .indus{font-family:Georgia,'Times New Roman',serif;font-style:italic;font-weight:800;font-size:26pt;color:#0f4cc2;letter-spacing:-.02em;line-height:1}
-.ph-logo .tag{font-size:6pt;color:#666;letter-spacing:.2em;margin-top:3px;font-weight:600}
+.ph-logo{width:280px;text-align:center;flex-shrink:0}
+.ph-logo img{display:block;width:100%;height:auto;max-height:160px;object-fit:contain;margin:0 auto}
 .ph-center{flex:1;text-align:center}
 .ph-company{font-weight:800;font-size:12pt;color:#1a1a1a;margin-bottom:3px}
 .ph-addr{font-size:8pt;color:#444;line-height:1.5}
@@ -203,8 +216,7 @@ tr.grand td{background:#e58025;color:#fff;font-weight:700;font-size:9.5pt;border
   <!-- Header (Indus logo + Ravasco company info + doc id) -->
   <div class="ph">
     <div class="ph-logo">
-      <div class="indus">Indus<sup style="font-size:9pt">&reg;</sup></div>
-      <div class="tag">ENGINEERED TO DELIVER</div>
+      <img src="/assets/icons/indus_logo.png" alt="Indus — Engineered to Deliver">
     </div>
     <div class="ph-center">
       <div class="ph-company">Ravasco Transmission &amp; Packing Pvt Ltd.</div>
@@ -539,10 +551,8 @@ function buildLineHTML(lineData, lineIdx, totalLines) {
       <td class="vl">${formatRupees((c.material_cost_per_m || 0) + (c.cop_per_m || 0) + (c.expenses_per_m || 0))} / m</td>
     </tr>
     <tr>
-      <td class="lb">Landed Cost / m</td>
-      <td class="vl">${formatRupees(p.rmc_per_meter)} / m</td>
       <td class="lb">GP %</td>
-      <td class="vl">${p.gp_pct_applied != null ? (p.gp_pct_applied * 100).toFixed(1) + '%' : '&mdash;'}</td>
+      <td class="vl" colspan="3">${p.gp_pct_applied != null ? (p.gp_pct_applied * 100).toFixed(1) + '%' : '&mdash;'}</td>
     </tr>
     <tr>
       <td class="lb">Quotation Cost / m (Standard)</td>
@@ -653,13 +663,13 @@ function buildLineHTML(lineData, lineIdx, totalLines) {
       <td class="vl">${p.per_mm_vd_price != null ? formatRupees(p.per_mm_vd_price) + ' / mm' : '&mdash;'}</td>
     </tr>
     <tr>
-      <td class="lb">Per mm Pre-Quote</td>
+      <td class="lb">Floor Price / mm</td>
       <td class="vl">${p.per_mm_running_price_pre_quote != null ? formatRupees(p.per_mm_running_price_pre_quote) + ' / mm' : '&mdash;'}</td>
       <td class="lb">RMC with GP / m</td>
       <td class="vl">${p.rmc_with_gp_per_m != null ? formatRupees(p.rmc_with_gp_per_m) + ' / m' : '&mdash;'}</td>
     </tr>
     <tr>
-      <td class="lb">Minimum Quoting Price / m</td>
+      <td class="lb">Floor Price / m</td>
       <td class="vl">${p.min_quotation_rmc_per_m != null ? formatRupees(p.min_quotation_rmc_per_m) + ' / m' : '&mdash;'}</td>
       <td class="lb"></td><td class="vl"></td>
     </tr>

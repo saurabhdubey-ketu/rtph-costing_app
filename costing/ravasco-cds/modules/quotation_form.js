@@ -763,10 +763,6 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
             <div class="ro-kpi-val" id="rs-vd-price">—</div>
           </div>
           <div class="ro-kpi">
-            <div class="ro-kpi-lbl">Landed Cost / m</div>
-            <div class="ro-kpi-val" id="rs-rmc">—</div>
-          </div>
-          <div class="ro-kpi">
             <div class="ro-kpi-lbl">Belt Weight / m</div>
             <div class="ro-kpi-val" id="rs-total-wt">—</div>
           </div>
@@ -912,7 +908,6 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
             <tbody>
               <tr><td>Material Cost / m <span class="ro-note">(raw materials only)</span></td><td id="rp-rmcvd-pm">—</td><td id="rp-rmcvd-kg">—</td><td id="rp-rmcvd-tot">—</td></tr>
               <tr><td>Manufacturing Cost / m <span class="ro-note">(material + COP + expenses)</span></td><td id="rp-mfg-pm">—</td><td id="rp-mfg-kg">—</td><td id="rp-mfg-tot">—</td></tr>
-              <tr><td>Landed Cost / m <span class="ro-note">(manufacturing + freight + packing)</span></td><td id="rp-rmc-pm">—</td><td id="rp-rmc-kg">—</td><td id="rp-rmc-tot">—</td></tr>
               <tr class="ro-subtotal"><td>Quotation Cost / m <span class="ro-note">(CD — GP on full cost)</span></td><td id="rp-rmcgp-pm">—</td><td id="rp-rmcgp-kg">—</td><td id="rp-rmcgp-tot">—</td></tr>
               <tr class="ro-subtotal"><td>VD Price / m <span class="ro-note">(GP on material only)</span></td><td id="rp-rmcvdgp-pm">—</td><td id="rp-rmcvdgp-kg">—</td><td id="rp-rmcvdgp-tot">—</td></tr>
               <tr><td>Crate Cost</td><td id="rp-crate-pm">—</td><td id="rp-crate-kg">—</td><td id="rp-crate-tot">—</td></tr>
@@ -931,9 +926,9 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
               <tr><td>GP Value (VD)</td><td colspan="2" id="rp-gp-value-vd">—</td></tr>
               <tr><td>Per mm Running Price (Standard)</td><td colspan="2" id="rp-permm-cd">—</td></tr>
               <tr><td>Per mm Running Price (VD)</td><td colspan="2" id="rp-permm-vd">—</td></tr>
-              <tr><td>Per mm Pre-Quote (Min Price)</td><td colspan="2" id="rp-permm-prequote">—</td></tr>
+              <tr><td>Floor Price / mm</td><td colspan="2" id="rp-permm-prequote">—</td></tr>
               <tr><td>RMC with GP / m</td><td colspan="2" id="rp-rmc-with-gp">—</td></tr>
-              <tr class="ro-subtotal"><td>Minimum Quoting Price / m</td><td colspan="2" id="rp-min-quoting">—</td></tr>
+              <tr class="ro-subtotal"><td>Floor Price / m</td><td colspan="2" id="rp-min-quoting">—</td></tr>
             </tbody>
           </table>
         </div>
@@ -2478,7 +2473,7 @@ function renderDetailedFields(container, result) {
     hdr('Pricing'),
     row('Min. Quoting Price / m (RMC)', p.rmc_per_meter != null ? formatRupees(p.rmc_per_meter) + ' / m' : '—'),
     row('RMC With GP / m', p.rmc_with_gp_per_m != null ? formatRupees(p.rmc_with_gp_per_m) + ' / m' : '—'),
-    row('Min Quotation RMC / m', p.min_quotation_rmc_per_m != null ? formatRupees(p.min_quotation_rmc_per_m) + ' / m' : '—'),
+    row('Floor Price / m', p.min_quotation_rmc_per_m != null ? formatRupees(p.min_quotation_rmc_per_m) + ' / m' : '—'),
     row('Per mm Running Price (pre-quote)', p.per_mm_running_price_pre_quote != null ? formatRupees(p.per_mm_running_price_pre_quote) + ' / mm' : '—'),
     row('Material Cost / m (RMC VD)', c.material_cost_per_m != null ? formatRupees(c.material_cost_per_m) + ' / m' : '—'),
     row('Selling Price / m (Standard)', p.cd_price_per_meter != null ? formatRupees(p.cd_price_per_meter) + ' / m' : '—'),

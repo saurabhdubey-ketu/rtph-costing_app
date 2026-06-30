@@ -17,6 +17,12 @@ const EMAIL_CFG     = path.join(DATA_DIR, 'email-config.json');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
+// ── Brand assets — loaded once at startup, embedded as data URIs in generated PDFs ──
+const LOGO_PATH = path.join(ROOT, 'assets', 'icons', 'indus_logo.png');
+const LOGO_DATA_URI = fs.existsSync(LOGO_PATH)
+  ? `data:image/png;base64,${fs.readFileSync(LOGO_PATH).toString('base64')}`
+  : '';
+
 // ── Email config helpers ──────────────────────────────────────────────────────
 function readEmailCfg() {
   try { return JSON.parse(fs.readFileSync(EMAIL_CFG, 'utf-8')); }
@@ -47,6 +53,13 @@ async function htmlToPdf(html) {
   const executablePath = findBrowser();
   if (!executablePath) throw new Error('No browser found for PDF generation. Install Chrome or Edge.');
 
+  // Inline brand assets — puppeteer's setContent has no base URL, so relative
+  // paths won't resolve. Swap the canonical logo URL for a data URI so the
+  // document is fully self-contained at render time.
+  const inlined = LOGO_DATA_URI
+    ? html.split('/assets/icons/indus_logo.png').join(LOGO_DATA_URI)
+    : html;
+
   const browser = await puppeteer.launch({
     executablePath,
     headless: true,
@@ -54,7 +67,7 @@ async function htmlToPdf(html) {
   });
   try {
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
+    await page.setContent(inlined, { waitUntil: 'networkidle0', timeout: 30000 });
     return await page.pdf({
       format: 'A4',
       printBackground: true,
