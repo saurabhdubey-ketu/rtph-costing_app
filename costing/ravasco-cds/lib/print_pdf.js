@@ -128,6 +128,9 @@ function _printFallback(html, filename) {
 
 function buildPrintHTML({ q, linesWithResults, cName, addrLine, cGst, cContact, cEmail, cPhone, printDate, sentDate, enquirySubject }) {
   const multiLine = linesWithResults.length > 1;
+  const revMatch  = q.id?.match(/-R(\d+)$/);
+  const revNum    = revMatch ? parseInt(revMatch[1]) : 0;
+  const revLabel  = revNum > 0 ? `REVISION ${revNum}` : null;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -147,6 +150,9 @@ body{font-family:'Trebuchet MS','Arial Narrow',Arial,sans-serif;font-size:10pt;c
 .ph-company{font-weight:800;font-size:12pt;color:#1a1a1a;margin-bottom:3px}
 .ph-addr{font-size:8pt;color:#444;line-height:1.5}
 .ph-addr a{color:#0f4cc2;text-decoration:none}
+.ph-meta{text-align:right;flex-shrink:0;min-width:110px}
+.ph-qid{font-size:8pt;font-family:monospace;color:#555;word-break:break-all}
+.ph-rev{display:inline-block;margin-top:5px;background:#c2700e;color:#fff;font-size:8pt;font-weight:800;letter-spacing:.08em;padding:3px 9px;border-radius:3px}
 /* ── Page content ── */
 .pc{padding:10px 14px 14px}
 
@@ -224,6 +230,10 @@ tr.grand td{background:#e58025;color:#fff;font-weight:700;font-size:9.5pt;border
       <div class="ph-addr">Maharashtra State, India &nbsp;|&nbsp; Pin Code : 400053</div>
       <div class="ph-addr"><a>www.indusbelts.com</a> &nbsp;/&nbsp; technical@ravasco.com</div>
     </div>
+    <div class="ph-meta">
+      <div class="ph-qid">${esc(q.id ?? '')}</div>
+      ${revLabel ? `<div class="ph-rev">${esc(revLabel)}</div>` : ''}
+    </div>
   </div>
 
   <div class="pc">
@@ -260,8 +270,8 @@ tr.grand td{background:#e58025;color:#fff;font-weight:700;font-size:9.5pt;border
 
     <!-- Footer -->
     <div class="ft">
-      <span>Frozen: ${sentDate}&nbsp;&nbsp;&middot;&nbsp;&nbsp;Printed: ${printDate}</span>
-      <span>Ravasco Transmission &amp; Packing Pvt Ltd. &nbsp;&middot;&nbsp; Internal Reference</span>
+      <span>Frozen: ${sentDate}&nbsp;&nbsp;&middot;&nbsp;&nbsp;Printed: ${printDate}${revLabel ? `&nbsp;&nbsp;&middot;&nbsp;&nbsp;<strong>${esc(revLabel)}</strong>` : ''}</span>
+      <span>Ravasco Transmission &amp; Packing Pvt Ltd. &nbsp;&middot;&nbsp; Internal Reference &nbsp;&middot;&nbsp; ${esc(q.id ?? '')}</span>
     </div>
 
   </div>

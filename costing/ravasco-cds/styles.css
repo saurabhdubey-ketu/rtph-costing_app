@@ -662,6 +662,16 @@ h4 { font-size: .9rem;  font-weight: 600; color: var(--color-text-muted); text-t
 .qf-topbar .btn-success { background: #1a7a3e; border-color: #1a7a3e; color: #fff; }
 .qf-topbar .btn-danger-outline { background: rgba(255,255,255,.5); border-color: #c0392b; color: #c0392b; }
 
+/* ── Revision history banner ── */
+.rev-history-bar { display: flex; align-items: center; gap: 10px; padding: 6px 16px; background: #fffbf0; border-bottom: 1px solid #f0e0a0; font-size: 12px; flex-wrap: wrap; }
+.rev-history-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #8a6b00; white-space: nowrap; }
+.rev-chain { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.rev-chain-item { display: flex; align-items: center; gap: 4px; }
+.rev-chain-current .rev-chain-label { font-weight: 700; color: #1a1a1a; }
+.rev-chain-link { color: #0f4cc2; text-decoration: none; font-weight: 500; }
+.rev-chain-link:hover { text-decoration: underline; }
+.rev-chain-sep { color: #aaa; font-size: 13px; padding: 0 2px; }
+
 /* ── Phase Stepper ────────────────────────────────────────────────── */
 .qf-stepper {
   display: flex;

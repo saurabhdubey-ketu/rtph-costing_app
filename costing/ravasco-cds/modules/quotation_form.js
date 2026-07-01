@@ -123,6 +123,7 @@ export function renderQuotationForm(container, params = {}) {
     recalc(container);
   }
   if (_isReadOnly) lockForm(container);
+  if (_isReadOnly && quotation?.id) renderRevisionHistory(container, quotation.id);
 }
 
 // ─── HTML ─────────────────────────────────────────────────────────────────────
@@ -2971,6 +2972,17 @@ function saveQuotation(container, quotation, status, isRevise) {
 
   storageSet(`quotation.${qtnId}`, record);
   auditLog({ entity: 'quotation', entity_id: qtnId, action: isSending ? 'sent' : isRevise ? 'revised' : (existingId ? 'edited' : 'created'), diff: { status, line_count: allLines.length } });
+
+  // Auto-flip the previous revision's status to 'revised' when a new revision is saved.
+  if (isRevise && quotation?.previous_revision_id) {
+    const prevRecord = storageGet(`quotation.${quotation.previous_revision_id}`);
+    if (prevRecord && !['won', 'lost'].includes(prevRecord.status)) {
+      prevRecord.status     = 'revised';
+      prevRecord.updated_at = new Date().toISOString();
+      storageSet(`quotation.${quotation.previous_revision_id}`, prevRecord);
+      auditLog({ entity: 'quotation', entity_id: quotation.previous_revision_id, action: 'superseded', diff: { status: 'revised', by: qtnId } });
+    }
+  }
   allLines.forEach((ln, i) => {
     if (isSending && ln.gp_pct_direct != null && Number(ln.gp_pct_direct) < 20) {
       auditLog({ entity: 'quotation', entity_id: qtnId, action: 'override_applied', diff: { line: i + 1, gp_pct: Number(ln.gp_pct_direct), floor: 20, note: 'GP below 20% minimum — approved at send' } });
@@ -2993,6 +3005,65 @@ function markOutcome(quotation, outcome) {
   auditLog({ entity: 'quotation', entity_id: quotation.id, action: outcome, diff: { status: outcome } });
   showToast(`Quotation ${quotation.id} marked as ${outcome.toUpperCase()}.`);
   window.dispatchEvent(new CustomEvent('ravasco:navigate', { detail: { view: 'quotations', action: 'view', id: quotation.id } }));
+}
+
+// ─── Revision history banner ───────────────────────────────────────────────────
+
+function renderRevisionHistory(container, currentId) {
+  if (!currentId) return;
+
+  const baseId = currentId.replace(/-R\d+$/, '');
+  const allQuotations = storageGetAll('quotation.');
+
+  // Collect all revisions in the same chain (base + base-R1, base-R2, …)
+  const chain = allQuotations
+    .filter(q => q.id === baseId || q.id.startsWith(baseId + '-R'))
+    .sort((a, b) => {
+      const revA = a.id.match(/-R(\d+)$/)?.[1] ?? '0';
+      const revB = b.id.match(/-R(\d+)$/)?.[1] ?? '0';
+      return parseInt(revA) - parseInt(revB);
+    });
+
+  if (chain.length <= 1) return; // no revisions — nothing to show
+
+  const badgeClass = s => `badge badge-${s}`;
+  const items = chain.map(q => {
+    const revMatch = q.id.match(/-R(\d+)$/);
+    const label = revMatch ? `Rev ${revMatch[1]}` : 'Original';
+    const isCurrent = q.id === currentId;
+    return `
+      <span class="rev-chain-item${isCurrent ? ' rev-chain-current' : ''}">
+        ${isCurrent
+          ? `<span class="rev-chain-label">${escHtml(label)}</span>`
+          : `<a href="#" class="rev-chain-link" data-nav-id="${escHtml(q.id)}">${escHtml(label)}</a>`
+        }
+        <span class="${badgeClass(q.status)}" style="font-size:9px;padding:1px 5px">${q.status}</span>
+      </span>`;
+  }).join('<span class="rev-chain-sep">›</span>');
+
+  const banner = document.createElement('div');
+  banner.className = 'rev-history-bar';
+  banner.innerHTML = `
+    <span class="rev-history-label">Revision chain:</span>
+    <span class="rev-chain">${items}</span>
+  `;
+
+  // Insert after the topbar
+  const topbar = container.querySelector('.qf-topbar');
+  if (topbar?.nextSibling) {
+    container.querySelector('.qf-shell')?.insertBefore(banner, topbar.nextSibling);
+  } else {
+    container.querySelector('.qf-shell')?.appendChild(banner);
+  }
+
+  banner.querySelectorAll('.rev-chain-link').forEach(a => {
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent('ravasco:navigate', {
+        detail: { view: 'quotations', action: 'view', id: a.dataset.navId },
+      }));
+    });
+  });
 }
 
 // ─── Lock / Revise ─────────────────────────────────────────────────────────────
