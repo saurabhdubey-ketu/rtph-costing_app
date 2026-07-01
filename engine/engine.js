@@ -453,6 +453,7 @@ export function runEngine(line, overrides = {}) {
       reel_cost_per_m:        total_length_m > 0 ? reel_cost / total_length_m : 0,
       reel_cost_per_kg:       wt_per_m > 0 && total_length_m > 0 ? (reel_cost / total_length_m) / wt_per_m : 0,
       freight_cost_total:     freight,
+      freight_cost_per_m:     total_length_m > 0 ? freight / total_length_m : 0,
       freight_cost_per_kg:    wt_per_m > 0 && total_length_m > 0 ? (freight / total_length_m) / wt_per_m : 0,
       total_rmc_cost:         total_cost,
     },

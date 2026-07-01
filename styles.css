@@ -572,23 +572,6 @@ h4 { font-size: .9rem;  font-weight: 600; color: var(--color-text-muted); text-t
 .cf-derived-value { font-size: .88rem; color: var(--color-text); padding-top: .38rem; display: inline-block; font-family: var(--font-mono); }
 .cf-row-overridden { opacity: .4; pointer-events: none; }
 
-/* Grade chips */
-.grade-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
-.chip {
-  padding: .25rem .65rem;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  font-size: .78rem;
-  font-weight: 500;
-  cursor: pointer;
-  background: var(--color-surface);
-  color: var(--color-text-muted);
-  transition: background var(--t-base), color var(--t-base), border-color var(--t-base);
-  line-height: 1.4;
-}
-.chip:hover  { border-color: var(--y-500); color: var(--y-700); background: var(--y-100); }
-.chip.active { background: var(--y-500); border-color: var(--y-500); color: var(--y-900); font-weight: 600; }
-
 /* Belt spec chips panel */
 #spec-chips-panel { margin-top: .85rem; }
 .cf-chips-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: .45rem; margin-bottom: .5rem; }
@@ -674,8 +657,20 @@ h4 { font-size: .9rem;  font-weight: 600; color: var(--color-text-muted); text-t
 .qf-topbar .btn-primary:hover { background: #000; }
 .qf-topbar .btn-outline { background: rgba(255,255,255,.5); border-color: var(--y-700); color: var(--y-900); }
 .qf-topbar .btn-outline:hover { background: #fff; }
+.qf-topbar .qf-add-belt-btn { background: var(--y-300); border-color: var(--y-500); color: var(--y-900); font-weight: 600; }
+.qf-topbar .qf-add-belt-btn:hover { background: var(--y-400); }
 .qf-topbar .btn-success { background: #1a7a3e; border-color: #1a7a3e; color: #fff; }
 .qf-topbar .btn-danger-outline { background: rgba(255,255,255,.5); border-color: #c0392b; color: #c0392b; }
+
+/* ── Revision history banner ── */
+.rev-history-bar { display: flex; align-items: center; gap: 10px; padding: 6px 16px; background: #fffbf0; border-bottom: 1px solid #f0e0a0; font-size: 12px; flex-wrap: wrap; }
+.rev-history-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #8a6b00; white-space: nowrap; }
+.rev-chain { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.rev-chain-item { display: flex; align-items: center; gap: 4px; }
+.rev-chain-current .rev-chain-label { font-weight: 700; color: #1a1a1a; }
+.rev-chain-link { color: #0f4cc2; text-decoration: none; font-weight: 500; }
+.rev-chain-link:hover { text-decoration: underline; }
+.rev-chain-sep { color: #aaa; font-size: 13px; padding: 0 2px; }
 
 /* ── Phase Stepper ────────────────────────────────────────────────── */
 .qf-stepper {
@@ -729,6 +724,65 @@ h4 { font-size: .9rem;  font-weight: 600; color: var(--color-text-muted); text-t
 .qf-step.qf-step-active .qf-step-dot,
 .qf-step.qf-step-done   .qf-step-dot { background: var(--y-500); border-color: var(--y-500); color: var(--y-900); }
 .qf-step-lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+
+/* ── Belt Line Tabs ───────────────────────────────────────────────── */
+.qf-line-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 16px 0;
+  background: var(--y-50, #fffef7);
+  border-bottom: 2px solid var(--y-300);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.qf-line-tabs::-webkit-scrollbar { display: none; }
+.qf-line-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 14px;
+  border: 1px solid var(--y-200);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: var(--y-100);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+  position: relative;
+  bottom: -2px;
+}
+.qf-line-tab:hover { background: var(--y-200); color: var(--color-text); }
+.qf-line-tab.active {
+  background: #fff;
+  color: var(--y-900);
+  font-weight: 700;
+  border-color: var(--y-300);
+  border-bottom-color: #fff;
+  z-index: 1;
+}
+.qf-line-tab.qf-line-add {
+  color: var(--y-700);
+  background: transparent;
+  border-style: dashed;
+  margin-left: 4px;
+}
+.qf-line-tab.qf-line-add:hover { background: var(--y-100); color: var(--y-900); }
+.qf-line-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.qf-line-remove:hover { background: #fee2e2; color: #c0392b; }
 
 /* ── GP Under-target Banner ───────────────────────────────────────── */
 .qf-gp-banner {
@@ -1195,6 +1249,32 @@ h4 { font-size: .9rem;  font-weight: 600; color: var(--color-text-muted); text-t
 }
 .ro-kpi-hero .ro-kpi-val { color: var(--y-900); }
 .ro-kpi-vd   .ro-kpi-val { color: var(--y-700); }
+
+/* Special note strip (top of live panel) */
+.ro-note-strip {
+  background: #fffaeb;
+  border: 1px solid #f0c040;
+  border-left: 4px solid #d99500;
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.ro-note-strip .ro-note-lbl {
+  font-weight: 700;
+  color: #8a6b00;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.ro-note-strip .ro-note-val {
+  color: #1a1a1a;
+  word-break: break-word;
+}
 
 /* Section blocks */
 .ro-block {

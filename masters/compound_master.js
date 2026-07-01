@@ -546,7 +546,7 @@ export const COVER_SKIM_COMPATIBILITY = Object.freeze([
 
   // GP covers (M-24, M-15, N-17) → standard fabric skim
   {
-    skim_code:           'SK-FAB',
+    skim_compound_id:    'CMP-SKFAB',
     match_level:         'FAMILY',
     cover_grade_family:  'GP',
     cover_compound_code: null,
@@ -556,7 +556,7 @@ export const COVER_SKIM_COMPATIBILITY = Object.freeze([
 
   // AR covers (SAR, DIN-X) → same fabric skim as GP
   {
-    skim_code:           'SK-FAB',
+    skim_compound_id:    'CMP-SKFAB',
     match_level:         'FAMILY',
     cover_grade_family:  'AR',
     cover_compound_code: null,
@@ -566,7 +566,7 @@ export const COVER_SKIM_COMPATIBILITY = Object.freeze([
 
   // HR covers (HR-T1, SHR-T2) → SBR-based heat skim
   {
-    skim_code:           'HR-SKIM',
+    skim_compound_id:    'CMP-HRSKIM',
     match_level:         'FAMILY',
     cover_grade_family:  'HR',
     cover_compound_code: null,
@@ -576,7 +576,7 @@ export const COVER_SKIM_COMPATIBILITY = Object.freeze([
 
   // UHR cover only → EPDM skim; overrides the HR family rule above
   {
-    skim_code:           'UHR-SKIM',
+    skim_compound_id:    'CMP-UHRSKIM',
     match_level:         'COMPOUND',
     cover_grade_family:  null,
     cover_compound_code: 'UHR',

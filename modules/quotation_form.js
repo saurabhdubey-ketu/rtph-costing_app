@@ -24,7 +24,6 @@ import { getAllCurrencies, initCurrencyDefaults } from '../masters/currency_mast
 import { getAllCustomers, getAllCustomerLocations, parseOptionKey, getCustomer } from '../masters/customer_master.js';
 import { mountCombobox }    from '../lib/dropdown.js';
 import { openPrintWindow }  from '../lib/print_pdf.js';
-import { openEmailModal }   from '../lib/email_modal.js';
 // Editable masters — read live so admin changes take effect immediately
 import {
   getLiveCompounds, getLiveBreakers, getLivePacking,
@@ -34,7 +33,29 @@ import {
 let _currentResult     = null;
 let _currentQuotation  = null;
 let _isReadOnly        = false;
-let _gradeFilter       = 'ALL';   // grade-family chip filter for compound dropdowns
+
+// ─── Multi-line state ─────────────────────────────────────────────────────────
+let _lines         = [{}];   // belt line data objects (one per belt in the quotation)
+let _lineResults   = [null]; // engine result per line
+let _activeLineIdx = 0;      // index of the line currently loaded in the form
+let _commercial    = {};     // shared commercial fields — apply to all belts
+
+// ─── Commercial state helpers ─────────────────────────────────────────────────
+
+function _extractCommercialFromQuotation(quotation) {
+  if (quotation?.commercial) return { ...quotation.commercial };
+  const src = quotation?.lines?.[0] ?? {};
+  return {
+    cop_rate_per_kg:       src.cop_rate_per_kg      ?? null,
+    ovr_expenses_per_kg:   src.ovr_expenses_per_kg   ?? null,
+    reel_type_id:          src.reel_type_id           ?? null,
+    packing_type_id:       src.packing_type_id        ?? null,
+    freight_included:      src.freight_included       ?? 'yes',
+    freight_id:            src.freight_id             ?? null,
+    freight_cost_override: src.freight_cost_override  ?? null,
+    freight_cost_type:     src.freight_cost_type      ?? 'KG',
+  };
+}
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
@@ -83,27 +104,124 @@ export function renderQuotationForm(container, params = {}) {
   _currentQuotation = quotation;
   _isReadOnly = isView || ['sent','revised','won','lost'].includes(quotation?.status);
 
-  const line      = quotation?.lines?.[0] ?? {};
+  initLines(quotation);
+  _commercial = _extractCommercialFromQuotation(quotation);
+  const line      = _lines[0];
   const customers = getAllCustomerLocations();  // active only, flat per location
   const enquiries = storageGetAll('enquiry.');
 
-  container.innerHTML = buildFormHTML({ quotation, isRevise, isView: _isReadOnly, line, customers, enquiries });
+  container.innerHTML = buildFormHTML({ quotation, isRevise, isView: _isReadOnly, line, customers, enquiries, lineCount: _lines.length, commercial: _commercial });
   populateAllDropdowns(container, line);
   setupEvents(container, quotation, isRevise);
 
   if (line.result) {
     _currentResult = line.result;
+    _lineResults[0] = line.result;
     renderResults(container, line.result);
   } else {
     // Recalc in all modes — view mode also needs _currentResult for PDF
     recalc(container);
   }
   if (_isReadOnly) lockForm(container);
+  if (_isReadOnly && quotation?.id) renderRevisionHistory(container, quotation.id);
 }
 
 // ─── HTML ─────────────────────────────────────────────────────────────────────
 
-function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries }) {
+function buildSharedCommercialHTML(comm, ro) {
+  const freightOn = comm.freight_included !== 'no';
+  return `
+<div id="qf-commercial">
+  <div style="font-size:11px;color:var(--color-text-muted);font-style:italic;margin-bottom:8px">Shared across all belts in this quotation.</div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px 24px">
+
+    <div>
+      <div class="cf-label" style="font-size:.78rem;padding-top:0">Cost of Production</div>
+      <div class="cf-input cf-input-inline">
+        <input type="number" name="cop_rate_per_kg" min="${GP_MASTER.override_bounds.cop_rate_per_kg.min}" max="${GP_MASTER.override_bounds.cop_rate_per_kg.max}" step="0.01"
+               value="${comm.cop_rate_per_kg ?? ''}" placeholder="" ${ro}>
+        <span class="cf-unit">₹/kg</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="cf-label" style="font-size:.78rem;padding-top:0">Expense per KG</div>
+      <div class="cf-input cf-input-inline">
+        <input type="number" name="ovr_expenses_per_kg" step="0.01" min="${GP_MASTER.override_bounds.expenses_per_kg.min}" max="${GP_MASTER.override_bounds.expenses_per_kg.max}"
+               value="${escHtml(String(comm.ovr_expenses_per_kg ?? GP_MASTER.expenses_per_kg_default))}" placeholder="${GP_MASTER.expenses_per_kg_default}" ${ro}>
+        <span class="cf-unit">₹/kg</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="cf-label" style="font-size:.78rem;padding-top:0">Reel Type</div>
+      <div class="cf-input"><select name="reel_type_id" ${ro}></select></div>
+    </div>
+
+    <div>
+      <div class="cf-label" style="font-size:.78rem;padding-top:0">Packing Type</div>
+      <div class="cf-input"><select name="packing_type_id" ${ro}></select></div>
+    </div>
+
+    <div>
+      <div class="cf-label" style="font-size:.78rem;padding-top:0">Reel Cost <span class="cf-unit">₹/m</span></div>
+      <div class="cf-input cf-input-inline">
+        <div class="cf-auto-wrap">
+          <input type="text" id="reel-cost-display" readonly disabled placeholder="—">
+          <span class="cf-auto-tag">AUTO</span>
+        </div>
+        <span class="cf-unit">₹/m</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="cf-label" style="font-size:.78rem;padding-top:0">Packing Cost <span class="cf-unit">₹/m</span></div>
+      <div class="cf-input cf-input-inline">
+        <div class="cf-auto-wrap">
+          <input type="text" id="packing-cost-display" readonly disabled placeholder="—">
+          <span class="cf-auto-tag">AUTO</span>
+        </div>
+        <span class="cf-unit">₹/m</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="cf-label" style="font-size:.78rem;padding-top:0">Freight Included</div>
+      <div class="cf-input">
+        <div class="qf-unit-toggle qf-yn-toggle" data-target="comm-freight-fields" ${ro ? 'data-ro="1"' : ''}>
+          <button type="button" class="qf-unit-opt${freightOn ? ' on' : ''}" data-unit="yes">Yes</button>
+          <button type="button" class="qf-unit-opt${!freightOn ? ' on' : ''}" data-unit="no">No</button>
+        </div>
+        <input type="hidden" name="freight_included" value="${freightOn ? 'yes' : 'no'}">
+      </div>
+    </div>
+
+    <div></div>
+
+  </div>
+
+  <div id="comm-freight-fields" style="display:${freightOn ? 'block' : 'none'};margin-top:8px">
+    <div style="display:flex;gap:20px;align-items:end;flex-wrap:wrap">
+      <div>
+        <div class="cf-label" style="font-size:.78rem;padding-top:0">Destination</div>
+        <div class="cf-input" style="min-width:160px"><select name="freight_id" ${ro}></select></div>
+      </div>
+      <div>
+        <div class="cf-label" style="font-size:.78rem;padding-top:0">Freight Rate <span class="cf-unit">₹/kg</span></div>
+        <div class="cf-input cf-input-inline" style="min-width:140px">
+          <input type="number" name="freight_cost_override" id="freight-cost-input"
+                 step="0.01" min="0" value="${comm.freight_cost_override ?? ''}"
+                 placeholder="Enter ₹ per kg" ${ro}>
+          <span class="cf-unit">₹/kg</span>
+        </div>
+      </div>
+      <input type="hidden" name="freight_cost_type" value="${comm.freight_cost_type ?? 'KG'}">
+    </div>
+  </div>
+</div>`;
+}
+
+function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries, lineCount = 1, commercial = {} }) {
   const q  = quotation ?? {};
   const ro = isView ? 'disabled' : '';
 
@@ -138,15 +256,17 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
       <div class="qf-topbar-actions">
         ${!isView ? `<button class="btn btn-outline" id="btn-save">Save Draft</button>` : ''}
         ${!isView && q.status !== 'sent' ? `<button class="btn btn-primary" id="btn-send">Mark as Sent</button>` : ''}
-        <button class="btn btn-outline" id="btn-pdf">↓ PDF</button>
-        ${!isView ? `<button class="btn btn-outline" id="btn-approve">✉ Send for Approval</button>` : ''}
-        ${isView && ['sent','revised','won','lost'].includes(q.status) ? `<button class="btn btn-outline" id="btn-email" style="margin-left:4px">✉ Email</button>` : ''}
+        ${!isView ? `<button class="btn btn-outline qf-add-belt-btn" id="btn-add-belt-header" title="Add another belt spec to this quotation">+ Belt Spec</button>` : ''}
+        ${q.id ? `<button class="btn btn-outline" id="btn-pdf">↓ Download<\/button>` : ''}
         ${isView && (q.status === 'sent' || q.status === 'revised') ? `<button class="btn btn-outline" id="btn-revise-btn">Revise</button>` : ''}
         ${isView && q.status === 'sent' ? `
           <button class="btn btn-success" id="btn-won">WON</button>
           <button class="btn btn-danger-outline" id="btn-lost">LOST</button>` : ''}
       </div>
     </div>
+
+    <!-- ── Belt Line Tabs ─────────────────────────────────────── -->
+    <div class="qf-line-tabs" id="qf-line-tabs">${buildLineTabsHTML(lineCount, 0, isView)}</div>
 
     <!-- ── Phase Stepper ───────────────────────────────────────── -->
     <div class="qf-stepper">
@@ -264,6 +384,19 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
               <div class="cf-label">No. of Ply</div>
               <div class="cf-input"><select name="plies" ${ro}></select></div>
             </div>
+            <div class="cf-row">
+              <div class="cf-label">Construction Grade</div>
+              <div class="cf-input"><select name="construction_grade" ${ro}></select></div>
+            </div>
+            <div class="cf-row">
+              <div class="cf-label cf-label-cust">Customer Grade</div>
+              <div class="cf-input"><select name="customer_grade"></select></div>
+            </div>
+
+            <div id="belt-spec-summary-panel" style="display:none;background:var(--y-100);border:1px solid var(--y-300);border-radius:999px;padding:.55rem 1.1rem;margin:10px 0;text-align:center;font-weight:700;font-size:.88rem;color:var(--y-900);font-family:var(--font-mono);white-space:normal;word-break:break-word;letter-spacing:.02em">
+              <span id="belt-spec-summary-display">—</span>
+            </div>
+
             <div class="cf-row" id="carcass-master-row">
               <div class="cf-label">Carcass Thickness <span class="cf-unit">mm</span></div>
               <div class="cf-input">
@@ -290,21 +423,12 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
                 <span class="cf-unit">mm</span>
               </div>
             </div>
-            <div class="cf-row">
-              <div class="cf-label">Fabric GSM <span class="cf-unit">g/m²</span></div>
-              <div class="cf-input cf-input-inline">
-                <input type="number" name="ovr_fabric_gsm" min="1" step="1"
-                       value="${escHtml(String(line.ovr_fabric_gsm ?? ''))}"
-                       placeholder="Auto from fabric master" ${ro}>
-                <span class="cf-unit">g/m²</span>
-              </div>
-            </div>
             <div id="spec-chips-panel" style="display:none">
               <div class="cf-chips-grid">
                 <div class="cf-spec-chip"><div class="cf-spec-chip-lbl">Belt Rating</div><div class="cf-spec-chip-val" id="belt-rating-display">—</div></div>
                 <div class="cf-spec-chip"><div class="cf-spec-chip-lbl">Carcass Thk · mm</div><div class="cf-spec-chip-val" id="carcass-thk-display">—</div></div>
                 <div class="cf-spec-chip"><div class="cf-spec-chip-lbl">Fabric Style</div><div class="cf-spec-chip-val" id="fabric-style-type-display">—</div></div>
-                <div class="cf-spec-chip"><div class="cf-spec-chip-lbl">Fabric GSM</div><div class="cf-spec-chip-val" id="fabric-gsm-display">—</div></div>
+
                 <div class="cf-spec-chip"><div class="cf-spec-chip-lbl">Fabric Thk · mm/ply</div><div class="cf-spec-chip-val" id="fabric-thickness-display">—</div></div>
                 <div class="cf-spec-chip"><div class="cf-spec-chip-lbl">Fabric Price · ₹/kg</div><div class="cf-spec-chip-val" id="fabric-price-display">—</div></div>
                 <div class="cf-spec-chip"><div class="cf-spec-chip-lbl">Base Fabric</div><div class="cf-spec-chip-val" id="base-fabric-display">—</div></div>
@@ -359,20 +483,6 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
           </div>
           <div class="qf-phase-body"><div class="qf-phase-inner">
             <div class="qf-sub-h">Covers &amp; Skim</div>
-            <div class="cf-row">
-              <div class="cf-label">Grade Filter</div>
-              <div class="cf-input">
-                <div class="grade-chips" id="grade-chips-cover">
-                  ${['ALL','GP','AR','HR','FR','OR','COLD','LRR'].map(g =>
-                    `<button type="button" class="chip${g === 'ALL' ? ' active' : ''}" data-grade-filter="${g}">${g}</button>`
-                  ).join('')}
-                </div>
-              </div>
-            </div>
-            <div class="cf-row">
-              <div class="cf-label cf-label-cust">Customer Grade</div>
-              <div class="cf-input"><select name="customer_grade"></select></div>
-            </div>
             <div class="qf-cvr-tabs">
               <button class="qf-cvr-tab on" data-cvrtab="top"  type="button">Top Cover</button>
               <button class="qf-cvr-tab"    data-cvrtab="bot"  type="button">Bottom Cover</button>
@@ -555,88 +665,7 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
             <span class="qf-phase-caret">▼</span>
           </div>
           <div class="qf-phase-body"><div class="qf-phase-inner">
-            <div class="cf-row">
-              <div class="cf-label">Cost of Production</div>
-              <div class="cf-input cf-input-inline">
-                <input type="number" name="cop_rate_per_kg" min="${GP_MASTER.override_bounds.cop_rate_per_kg.min}" max="${GP_MASTER.override_bounds.cop_rate_per_kg.max}" step="0.01"
-                       value="${line.cop_rate_per_kg ?? ''}" placeholder="" ${ro}>
-                <span class="cf-unit">₹ / kg</span>
-              </div>
-            </div>
-            <div class="cf-row">
-              <div class="cf-label">Expense per KG</div>
-              <div class="cf-input cf-input-inline">
-                <input type="number" name="ovr_expenses_per_kg" step="0.01" min="${GP_MASTER.override_bounds.expenses_per_kg.min}" max="${GP_MASTER.override_bounds.expenses_per_kg.max}"
-                       value="${escHtml(String(line.ovr_expenses_per_kg ?? GP_MASTER.expenses_per_kg_default))}" placeholder="${GP_MASTER.expenses_per_kg_default}" ${ro}>
-                <span class="cf-unit">₹ / kg</span>
-              </div>
-            </div>
-            <div class="cf-row">
-              <div class="cf-label">Reel Type</div>
-              <div class="cf-input"><select name="reel_type_id" ${ro}></select></div>
-            </div>
-            <div class="cf-row">
-              <div class="cf-label">Packing Type</div>
-              <div class="cf-input"><select name="packing_type_id" ${ro}></select></div>
-            </div>
-            <div class="cf-row">
-              <div class="cf-label">Reel Cost <span class="cf-unit">₹/m</span></div>
-              <div class="cf-input cf-input-inline">
-                <div class="cf-auto-wrap">
-                  <input type="text" id="reel-cost-display" readonly disabled placeholder="—">
-                  <span class="cf-auto-tag">AUTO</span>
-                </div>
-                <span class="cf-unit">₹ / m</span>
-              </div>
-            </div>
-            <div class="cf-row">
-              <div class="cf-label">Packing Cost <span class="cf-unit">₹/m</span></div>
-              <div class="cf-input cf-input-inline">
-                <div class="cf-auto-wrap">
-                  <input type="text" id="packing-cost-display" readonly disabled placeholder="—">
-                  <span class="cf-auto-tag">AUTO</span>
-                </div>
-                <span class="cf-unit">₹ / m</span>
-              </div>
-            </div>
-
-            <div class="cf-divider"></div>
-
-            <div class="cf-row">
-              <div class="cf-label">Freight Included</div>
-              <div class="cf-input">
-                <div class="qf-unit-toggle qf-yn-toggle" data-target="freight-fields" ${ro ? 'data-ro="1"' : ''}>
-                  <button type="button" class="qf-unit-opt${line.freight_included !== 'no' ? ' on' : ''}" data-unit="yes">Yes</button>
-                  <button type="button" class="qf-unit-opt${line.freight_included === 'no' ? ' on' : ''}" data-unit="no">No</button>
-                </div>
-                <input type="hidden" name="freight_included" value="${line.freight_included === 'no' ? 'no' : 'yes'}">
-              </div>
-            </div>
-            <div id="freight-fields" style="display:${line.freight_included === 'no' ? 'none' : 'block'}">
-              <div class="cf-row">
-                <div class="cf-label">Destination</div>
-                <div class="cf-input"><select name="freight_id" ${ro}></select></div>
-              </div>
-              <div class="cf-row">
-                <div class="cf-label">Freight Rate <span class="cf-unit">₹/kg</span></div>
-                <div class="cf-input cf-input-inline">
-                  <input type="number" name="freight_cost_override" id="freight-cost-input"
-                         step="0.01" min="0" value="${line.freight_cost_override ?? ''}"
-                         placeholder="Enter ₹ per kg" ${ro}>
-                  <span class="cf-unit">₹ / kg</span>
-                </div>
-              </div>
-              <div class="cf-row" style="display:none">
-                <div class="cf-label">Cost Type</div>
-                <div class="cf-input">
-                  <select name="freight_cost_type" ${ro}>
-                    <option value="KG"    ${(line.freight_cost_type ?? 'KG') === 'KG'    ? 'selected' : ''}>KG (per kg)</option>
-                    <option value="RM"    ${line.freight_cost_type === 'RM'    ? 'selected' : ''}>RM (per metre)</option>
-                    <option value="SQMTR" ${line.freight_cost_type === 'SQMTR' ? 'selected' : ''}>SQ MTR (per m²)</option>
-                  </select>
-                </div>
-              </div>
-            </div>
+            ${buildSharedCommercialHTML(commercial, ro)}
 
             <div class="cf-divider"></div>
 
@@ -683,7 +712,7 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
                 <div class="cf-label">Price Type</div>
                 <div class="cf-input">
                   <select name="discount_price_type" ${ro}>
-                    <option value="CD" ${(line.discount_price_type ?? 'CD') === 'CD' ? 'selected' : ''}>CD (Standard)</option>
+                    <option value="CD" ${(line.discount_price_type ?? 'CD') === 'CD' ? 'selected' : ''}>Standard</option>
                     <option value="VD" ${line.discount_price_type === 'VD' ? 'selected' : ''}>VD</option>
                   </select>
                 </div>
@@ -735,10 +764,6 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
             <div class="ro-kpi-val" id="rs-vd-price">—</div>
           </div>
           <div class="ro-kpi">
-            <div class="ro-kpi-lbl">RMC / m</div>
-            <div class="ro-kpi-val" id="rs-rmc">—</div>
-          </div>
-          <div class="ro-kpi">
             <div class="ro-kpi-lbl">Belt Weight / m</div>
             <div class="ro-kpi-val" id="rs-total-wt">—</div>
           </div>
@@ -748,18 +773,73 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
           </div>
         </div>
 
+        <!-- Customer note strip -->
+        <div id="ro-special-note" class="ro-note-strip" style="display:none">
+          <span class="ro-note-lbl">Special Note</span>
+          <span class="ro-note-val" id="ri-special-note">—</span>
+        </div>
+
         <!-- Block 1 — Belt Specification (input summary chips) -->
         <div class="ro-block">
           <div class="ro-block-hd">Belt Specification</div>
           <div class="ro-chips">
             <div class="ro-chip"><span class="ro-chip-lbl">Width</span><span class="ro-chip-val" id="ri-width">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Belt Type</span><span class="ro-chip-val" id="ri-belt-type">—</span></div>
             <div class="ro-chip"><span class="ro-chip-lbl">Fabric Type</span><span class="ro-chip-val" id="ri-fabric-type">—</span></div>
             <div class="ro-chip"><span class="ro-chip-lbl">Belt Rating</span><span class="ro-chip-val" id="ri-rating">—</span></div>
             <div class="ro-chip"><span class="ro-chip-lbl">No of Ply</span><span class="ro-chip-val" id="ri-plies">—</span></div>
             <div class="ro-chip"><span class="ro-chip-lbl">Top Cover</span><span class="ro-chip-val" id="ri-top">—</span></div>
             <div class="ro-chip"><span class="ro-chip-lbl">Bottom Cover</span><span class="ro-chip-val" id="ri-bot">—</span></div>
-            <div class="ro-chip ro-chip-wide"><span class="ro-chip-lbl">Grade</span><span class="ro-chip-val" id="ri-grade">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Top Compound</span><span class="ro-chip-val" id="ri-top-cmpd">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Bot Compound</span><span class="ro-chip-val" id="ri-bot-cmpd">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Skim Compound</span><span class="ro-chip-val" id="ri-skim-cmpd">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Carcass · Master</span><span class="ro-chip-val" id="ri-carcass-master">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Customer CCT</span><span class="ro-chip-val" id="ri-cust-cct">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">TBT · Calc</span><span class="ro-chip-val" id="ri-tbt-calc">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Customer TBT</span><span class="ro-chip-val" id="ri-cust-tbt">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Edge</span><span class="ro-chip-val" id="ri-edge">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Construction</span><span class="ro-chip-val" id="ri-construction">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Endless Length</span><span class="ro-chip-val" id="ri-endless-len">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">BOT</span><span class="ro-chip-val" id="ri-bot-brk">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">BOB</span><span class="ro-chip-val" id="ri-bob-brk">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Reel Type</span><span class="ro-chip-val" id="ri-reel-type">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Packing Type</span><span class="ro-chip-val" id="ri-packing-type">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Construction Grade</span><span class="ro-chip-val" id="ri-construction-grade">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Customer Grade</span><span class="ro-chip-val" id="ri-grade">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">Length per Roll</span><span class="ro-chip-val" id="ri-lpr">—</span></div>
+            <div class="ro-chip"><span class="ro-chip-lbl">No. of Rolls</span><span class="ro-chip-val" id="ri-rolls">—</span></div>
+            <div class="ro-chip ro-chip-wide"><span class="ro-chip-lbl">Short Form</span><span class="ro-chip-val" id="ri-shortform">—</span></div>
+            <div class="ro-chip ro-chip-wide"><span class="ro-chip-lbl">Description</span><span class="ro-chip-val" id="ri-description">—</span></div>
           </div>
+        </div>
+
+        <!-- Block 1b — As-Used Rates (rate snapshot) -->
+        <div class="ro-block">
+          <div class="ro-block-hd">As-Used Rates</div>
+          <table class="ro-table">
+            <thead><tr><th>Component</th><th>SG / GSM</th><th>Rate ₹/kg</th></tr></thead>
+            <tbody>
+              <tr><td>Top Cover</td><td id="rr-top-sg">—</td><td id="rr-top-rate">—</td></tr>
+              <tr><td>Bottom Cover</td><td id="rr-bot-sg">—</td><td id="rr-bot-rate">—</td></tr>
+              <tr><td>Skim</td><td id="rr-skim-sg">—</td><td id="rr-skim-rate">—</td></tr>
+              <tr><td>Fabric</td><td id="rr-fabric-gsm">—</td><td id="rr-fabric-rate">—</td></tr>
+              <tr id="rr-brktop-row" style="display:none"><td>Breaker Top</td><td id="rr-brktop-gsm">—</td><td id="rr-brktop-rate">—</td></tr>
+              <tr id="rr-brkbot-row" style="display:none"><td>Breaker Bottom</td><td id="rr-brkbot-gsm">—</td><td id="rr-brkbot-rate">—</td></tr>
+              <tr class="ro-subtotal"><td>Blended SG</td><td colspan="2" id="rr-sg-blended">—</td></tr>
+            </tbody>
+          </table>
+          <table class="ro-table" style="margin-top:8px">
+            <thead><tr><th>Charges</th><th colspan="2">Value</th></tr></thead>
+            <tbody>
+              <tr><td>COP Rate</td><td colspan="2" id="rr-cop-rate">—</td></tr>
+              <tr><td>Expenses / kg</td><td colspan="2" id="rr-expenses-kg">—</td></tr>
+              <tr><td>Effective Production Rate <span class="ro-note">(COP + Expenses)</span></td><td colspan="2" id="rr-eff-prod">—</td></tr>
+              <tr><td>Packing Cost / m</td><td colspan="2" id="rr-packing-pm">—</td></tr>
+              <tr><td>Reel Cost / m</td><td colspan="2" id="rr-reel-pm">—</td></tr>
+              <tr><td>Freight Destination</td><td colspan="2" id="rr-freight-dest">—</td></tr>
+              <tr><td>Freight Rate</td><td colspan="2" id="rr-freight-rate">—</td></tr>
+            </tbody>
+          </table>
         </div>
 
         <!-- Block 2 — Weight Calculations -->
@@ -777,6 +857,17 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
               <tr id="rw-bob-row" style="display:none"><td>BOB</td><td id="rw-bob-brk-pm">—</td><td id="rw-bob-brk-kg">—</td></tr>
               <tr class="ro-total"><td><strong>Total Calculated</strong></td><td id="rw-calc-pm">—</td><td id="rw-calc-kg">—</td></tr>
               <tr class="ro-total ro-actual"><td><strong>Total Actual</strong><span class="ro-note"> (no wastage)</span></td><td id="rw-actual-pm">—</td><td id="rw-actual-kg">—</td></tr>
+            </tbody>
+          </table>
+          <table class="ro-table" style="margin-top:8px">
+            <thead><tr><th>Geometry</th><th colspan="2">Value</th></tr></thead>
+            <tbody>
+              <tr><td>Effective Width</td><td colspan="2" id="rw-eff-width">—</td></tr>
+              <tr><td>Effective Length</td><td colspan="2" id="rw-eff-length">—</td></tr>
+              <tr><td>Width Factor</td><td colspan="2" id="rw-width-factor">—</td></tr>
+              <tr><td>Length Factor</td><td colspan="2" id="rw-length-factor">—</td></tr>
+              <tr><td>Compound GSM</td><td colspan="2" id="rw-compound-gsm">—</td></tr>
+              <tr><td>Total Belt Thickness</td><td colspan="2" id="rw-tbt-val">—</td></tr>
             </tbody>
           </table>
         </div>
@@ -798,6 +889,16 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
               <tr class="ro-total ro-actual"><td><strong>Total Actual</strong><span class="ro-note"> (no wastage)</span></td><td id="rc-actual-pm">—</td><td id="rc-actual-tot">—</td></tr>
             </tbody>
           </table>
+          <table class="ro-table" style="margin-top:8px">
+            <thead><tr><th>Other Costs</th><th>₹ / m</th><th>Total ₹</th></tr></thead>
+            <tbody>
+              <tr><td>Cost of Production</td><td id="rc-cop-pm">—</td><td id="rc-cop-tot">—</td></tr>
+              <tr><td>Expenses</td><td id="rc-exp-pm">—</td><td id="rc-exp-tot">—</td></tr>
+              <tr class="ro-subtotal"><td>Total Compound Cost <span class="ro-note">(T + B + S + BOT + BOB skim)</span></td><td id="rc-totcomp-pm">—</td><td id="rc-totcomp-tot">—</td></tr>
+              <tr class="ro-subtotal"><td>Fabric + BOT + BOB</td><td id="rc-fbtbob-pm">—</td><td id="rc-fbtbob-tot">—</td></tr>
+              <tr><td>Compound Price / kg</td><td colspan="2" id="rc-cmpd-price-kg">—</td></tr>
+            </tbody>
+          </table>
         </div>
 
         <!-- Block 4 — Pricing -->
@@ -806,15 +907,44 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
           <table class="ro-table ro-table-4col">
             <thead><tr><th>Item</th><th>₹ / m</th><th>₹ / kg</th><th>Total ₹</th></tr></thead>
             <tbody>
-              <tr><td>Total Cost / m <span class="ro-note">(mat + COP + exp + crate + freight)</span></td><td id="rp-rmc-pm">—</td><td id="rp-rmc-kg">—</td><td id="rp-rmc-tot">—</td></tr>
-              <tr><td>Material Cost / m <span class="ro-note">(fabric + rubber only)</span></td><td id="rp-rmcvd-pm">—</td><td id="rp-rmcvd-kg">—</td><td id="rp-rmcvd-tot">—</td></tr>
-              <tr class="ro-subtotal"><td>CD Price / m <span class="ro-note">(GP% on full cost)</span></td><td id="rp-rmcgp-pm">—</td><td id="rp-rmcgp-kg">—</td><td id="rp-rmcgp-tot">—</td></tr>
-              <tr class="ro-subtotal"><td>VD Price / m <span class="ro-note">(GP% on material only)</span></td><td id="rp-rmcvdgp-pm">—</td><td id="rp-rmcvdgp-kg">—</td><td id="rp-rmcvdgp-tot">—</td></tr>
+              <tr><td>Material Cost / m <span class="ro-note">(raw materials only)</span></td><td id="rp-rmcvd-pm">—</td><td id="rp-rmcvd-kg">—</td><td id="rp-rmcvd-tot">—</td></tr>
+              <tr><td>Manufacturing Cost / m <span class="ro-note">(material + COP + expenses)</span></td><td id="rp-mfg-pm">—</td><td id="rp-mfg-kg">—</td><td id="rp-mfg-tot">—</td></tr>
+              <tr class="ro-subtotal"><td>Quotation Cost / m <span class="ro-note">(CD — GP on full cost)</span></td><td id="rp-rmcgp-pm">—</td><td id="rp-rmcgp-kg">—</td><td id="rp-rmcgp-tot">—</td></tr>
+              <tr class="ro-subtotal"><td>VD Price / m <span class="ro-note">(GP on material only)</span></td><td id="rp-rmcvdgp-pm">—</td><td id="rp-rmcvdgp-kg">—</td><td id="rp-rmcvdgp-tot">—</td></tr>
               <tr><td>Crate Cost</td><td id="rp-crate-pm">—</td><td id="rp-crate-kg">—</td><td id="rp-crate-tot">—</td></tr>
               <tr id="rp-reel-row"><td>Reel Cost</td><td id="rp-reel-pm">—</td><td id="rp-reel-kg">—</td><td id="rp-reel-tot">—</td></tr>
               <tr id="rp-freight-row"><td>Freight Cost</td><td id="rp-freight-pm">—</td><td id="rp-freight-kg">—</td><td id="rp-freight-tot">—</td></tr>
               <tr class="ro-total"><td><strong>Total Material Cost</strong></td><td colspan="2" id="rp-total-rmcvd-pm">—</td><td id="rp-total-rmcvd">—</td></tr>
               <tr class="ro-total ro-hero-row"><td><strong>Total VD Quotation</strong></td><td colspan="2" id="rp-total-quot-pm">—</td><td id="rp-total-quot-vd">—</td></tr>
+            </tbody>
+          </table>
+          <table class="ro-table" style="margin-top:8px">
+            <thead><tr><th>GP &amp; Per-mm Metrics</th><th colspan="2">Value</th></tr></thead>
+            <tbody>
+              <tr><td>GP % Applied</td><td colspan="2" id="rp-gp-applied">—</td></tr>
+              <tr><td>Effective GP % (Standard)</td><td colspan="2" id="rp-gp-effective">—</td></tr>
+              <tr><td>GP Value (Standard)</td><td colspan="2" id="rp-gp-value-cd">—</td></tr>
+              <tr><td>GP Value (VD)</td><td colspan="2" id="rp-gp-value-vd">—</td></tr>
+              <tr><td>Per mm Running Price (Standard)</td><td colspan="2" id="rp-permm-cd">—</td></tr>
+              <tr><td>Per mm Running Price (VD)</td><td colspan="2" id="rp-permm-vd">—</td></tr>
+              <tr><td>Floor Price / mm</td><td colspan="2" id="rp-permm-prequote">—</td></tr>
+              <tr><td>RMC with GP / m</td><td colspan="2" id="rp-rmc-with-gp">—</td></tr>
+              <tr class="ro-subtotal"><td>Floor Price / m</td><td colspan="2" id="rp-min-quoting">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Block 5 — FX / USD Pricing (conditional) -->
+        <div class="ro-block" id="ro-fx-block" style="display:none">
+          <div class="ro-block-hd">FX / USD Pricing</div>
+          <table class="ro-table">
+            <thead><tr><th>Item</th><th colspan="2">Value</th></tr></thead>
+            <tbody>
+              <tr><td>Exchange Rate</td><td colspan="2" id="rfx-rate">—</td></tr>
+              <tr><td>Min Quoting Price / m (USD)</td><td colspan="2" id="rfx-rmc-usd">—</td></tr>
+              <tr><td>Standard Quotation Rate / m (USD)</td><td colspan="2" id="rfx-cd-usd">—</td></tr>
+              <tr><td>VD Quotation Rate / m (USD)</td><td colspan="2" id="rfx-vd-usd">—</td></tr>
+              <tr class="ro-total"><td><strong>Total Order Value (USD)</strong></td><td colspan="2" id="rfx-total-usd">—</td></tr>
             </tbody>
           </table>
         </div>
@@ -1017,7 +1147,9 @@ function populateAllDropdowns(container, line) {
   pop(container, '[name="fabric_type"]', FABRIC_TYPE_MASTER.filter(r => r.active), 'code', 'name', line.fabric_type);
   pop(container, '[name="customer_fabric_type"]', FABRIC_TYPE_MASTER.filter(r => r.active), 'code', 'name', line.customer_fabric_type);
 
-  pop(container, '[name="customer_grade"]', GRADE_MASTER.filter(r => r.active), 'code', 'name', line.customer_grade);
+  const _activeGrades = GRADE_MASTER.filter(r => r.active);
+  pop(container, '[name="construction_grade"]', _activeGrades, 'code', 'name', line.construction_grade);
+  pop(container, '[name="customer_grade"]',     _activeGrades, 'code', 'name', line.customer_grade);
 
   populateFabricStrengthDropdowns(container, line.fabric_type, line.fabric_strength, line.plies, line.customer_fabric_strength);
 
@@ -1034,8 +1166,7 @@ function populateAllDropdowns(container, line) {
   // Cover compounds — role check via split (roles is a pipe-separated string)
   const isCoverRole = r => { const rs = r.roles?.split('|') ?? []; return rs.includes('TOP_COVER') || rs.includes('BOTTOM_COVER'); };
   const isSkimRole  = r => (r.roles?.split('|') ?? []).includes('SKIM');
-  const allCover    = _COMPOUND.filter(r => r.active !== false && isCoverRole(r));
-  const coverCmpds  = _gradeFilter === 'ALL' ? allCover : allCover.filter(r => r.grade_family === _gradeFilter);
+  const coverCmpds  = _COMPOUND.filter(r => r.active !== false && isCoverRole(r));
   pop(container, '[name="top_cover_compound_id"]',    coverCmpds, 'id', 'name', line.top_cover_compound_id ?? line.grade_id);
   pop(container, '[name="bottom_cover_compound_id"]', coverCmpds, 'id', 'name', line.bottom_cover_compound_id ?? line.grade_id);
 
@@ -1059,10 +1190,10 @@ function populateAllDropdowns(container, line) {
   // Packing — split by applies_to
   const reelOpts    = _PACKING.filter(r => (r.applies_to === 'reel'    || r.applies_to === 'both') && r.active !== false);
   const packingOpts = _PACKING.filter(r => (r.applies_to === 'packing' || r.applies_to === 'both') && r.active !== false);
-  pop(container, '[name="reel_type_id"]',    reelOpts,    'id', 'name', line.reel_type_id);
-  pop(container, '[name="packing_type_id"]', packingOpts, 'id', 'name', line.packing_type_id);
+  pop(container, '[name="reel_type_id"]',    reelOpts,    'id', 'name', _commercial.reel_type_id);
+  pop(container, '[name="packing_type_id"]', packingOpts, 'id', 'name', _commercial.packing_type_id);
 
-  pop(container, '[name="freight_id"]', _FREIGHT.filter(r => r.active !== false), 'id', 'state_name', line.freight_id);
+  pop(container, '[name="freight_id"]', _FREIGHT.filter(r => r.active !== false), 'id', 'state_name', _commercial.freight_id);
 
   // Currency — default to INR
   initCurrencyDefaults();
@@ -1344,14 +1475,6 @@ function updateDerivedDisplays(container, _line) {
     const ftRow = FABRIC_TYPE_MASTER.find(r => r.code === fabricType);
     styleEl.textContent = ftRow?.name ?? '—';
   }
-  const gsmEl      = container.querySelector('#fabric-gsm-display');
-  const gsmOverride = parseFloat(container.querySelector('[name="ovr_fabric_gsm"]')?.value);
-  const effGsm      = !isNaN(gsmOverride) ? gsmOverride : fabricRateRow?.gsm;
-  if (gsmEl) {
-    gsmEl.textContent = effGsm != null ? String(effGsm) : '—';
-    gsmEl.style.color  = !isNaN(gsmOverride) ? 'var(--color-accent-dk)' : '';
-    gsmEl.title        = !isNaN(gsmOverride) ? 'Manual override active' : '';
-  }
   const fThkEl  = container.querySelector('#fabric-thickness-display');
   if (fThkEl) fThkEl.textContent = fabricRateRow?.thickness_mm != null ? `${fabricRateRow.thickness_mm} mm` : '—';
   const priceEl = container.querySelector('#fabric-price-display');
@@ -1360,6 +1483,44 @@ function updateDerivedDisplays(container, _line) {
 
   // Skim ↔ Cover match
   updateSkimMatchDisplay(container);
+
+  // Belt spec summary — concatenation of Phase 2 fields up to No. of Ply
+  updateBeltSpecSummary(container);
+}
+
+// Belt spec summary tile — shows live concatenation of the user-entered Phase 2 fields.
+function updateBeltSpecSummary(container) {
+  const panel = container.querySelector('#belt-spec-summary-panel');
+  const display = container.querySelector('#belt-spec-summary-display');
+  if (!panel || !display) return;
+
+  const selText = name => {
+    const el = container.querySelector(`[name="${name}"]`);
+    if (!el || el.tagName !== 'SELECT') return null;
+    const opt = el.options[el.selectedIndex];
+    if (!opt || !opt.value) return null;
+    return opt.textContent?.trim() || null;
+  };
+
+  const widthRaw = container.querySelector('[name="width_mm"]')?.value?.trim();
+  const widthLbl = container.querySelector('[name="unit_system"]')?.value === 'imperial' ? 'in' : 'mm';
+
+  const parts = [
+    widthRaw ? `${widthRaw} ${widthLbl}` : null,
+    selText('fabric_make'),
+    selText('fabric_type'),
+    selText('fabric_strength'),
+    selText('plies'),
+    selText('construction_grade'),
+  ].filter(Boolean);
+
+  if (parts.length === 0) {
+    panel.style.display = 'none';
+    display.textContent = '—';
+    return;
+  }
+  panel.style.display = 'block';
+  display.textContent = parts.join(' - ');
 }
 
 // ─── Skim ↔ Cover match check display ─────────────────────────────────────────
@@ -1515,19 +1676,14 @@ function collectLine(container) {
   const f    = sel => container.querySelector(`[name="${sel}"]`)?.value;
   const fNum = sel => { const v = f(sel); return v !== '' && v != null ? Number(v) : null; };
 
-  const freightEnabled = container.querySelector('[name="freight_included"]')?.value !== 'no';
   const discEnabled    = container.querySelector('[name="discount_enabled"]')?.value === 'yes';
   const discount_pct   = discEnabled ? (fNum('discount_pct_input') ?? 0) / 100 : 0;
 
   const _BREAKER  = getLiveBreakers();
-  const _PACKING  = getLivePacking();
   const brkTopId  = container.querySelector('[name="breaker_top_enabled"]')?.value === 'yes' ? (f('breaker_top_id') || null) : null;
   const brkBotId  = container.querySelector('[name="breaker_bot_enabled"]')?.value === 'yes' ? (f('breaker_bot_id') || null) : null;
   const brkTopRow = brkTopId ? _BREAKER.find(r => r.id === brkTopId) : null;
   const brkBotRow = brkBotId ? _BREAKER.find(r => r.id === brkBotId) : null;
-
-  const packingTypeId = f('packing_type_id');
-  const packingRow    = _PACKING.find(r => r.id === packingTypeId);
 
   return {
     product_type_id:              f('product_type_id'),
@@ -1558,14 +1714,6 @@ function collectLine(container) {
     edge_id:                      f('edge_id'),
     length_per_roll_m:            fNum('length_per_roll_m'),
     no_of_rolls:                  fNum('no_of_rolls'),
-    cop_rate_per_kg:              fNum('cop_rate_per_kg'),
-    reel_type_id:                 f('reel_type_id'),
-    packing_type_id:              packingTypeId,
-    reel_packing_id:              packingTypeId,   // engine uses reel_packing_id
-    freight_included:             freightEnabled,
-    freight_id:                   freightEnabled ? f('freight_id') : null,
-    freight_cost_type:            f('freight_cost_type') ?? 'KG',
-    freight_cost_override:        fNum('freight_cost_override'),
     currency_id:                  f('currency_id') || null,
     exchange_rate:                fNum('exchange_rate'),
     gp_pct_direct:                fNum('gp_pct_direct'),
@@ -1579,14 +1727,31 @@ function collectLine(container) {
     ovr_sg_bottom:                fNum('ovr_sg_bottom'),
     ovr_skim_rate:                fNum('ovr_skim_rate'),
     ovr_fabric_price:             fNum('ovr_fabric_price'),
-    ovr_fabric_gsm:               fNum('ovr_fabric_gsm'),
-    ovr_expenses_per_kg:          fNum('ovr_expenses_per_kg'),
+
     customer_carcass_thickness_mm: fNum('customer_carcass_thickness_mm'),
     customer_tbt_mm:               fNum('customer_tbt_mm'),
     customer_fabric_type:          f('customer_fabric_type') || null,
     customer_fabric_strength:      fNum('customer_fabric_strength'),
+    construction_grade:            f('construction_grade') || null,
     customer_grade:                f('customer_grade') || null,
     // Post-order tracking §8.12
+  };
+}
+
+function collectCommercial(container) {
+  const f    = sel => container.querySelector(`#qf-commercial [name="${sel}"]`)?.value;
+  const fNum = sel => { const v = f(sel); return v !== '' && v != null ? Number(v) : null; };
+  const freightEnabled = f('freight_included') !== 'no';
+  return {
+    cop_rate_per_kg:       fNum('cop_rate_per_kg'),
+    ovr_expenses_per_kg:   fNum('ovr_expenses_per_kg'),
+    reel_type_id:          f('reel_type_id')    || null,
+    packing_type_id:       f('packing_type_id') || null,
+    reel_packing_id:       f('packing_type_id') || f('reel_type_id') || null,
+    freight_included:      freightEnabled ? 'yes' : 'no',
+    freight_id:            freightEnabled ? (f('freight_id') || null) : null,
+    freight_cost_type:     f('freight_cost_type') ?? 'KG',
+    freight_cost_override: fNum('freight_cost_override'),
   };
 }
 
@@ -1614,6 +1779,12 @@ function recalc(container) {
 
   // Build engine-ready copy — substitute defaults for any unfilled optional field
   const el = { ...line };
+
+  // Merge shared commercial fields (apply to all belts); keep _commercial in sync
+  const comm = collectCommercial(container);
+  _commercial = comm;
+  Object.assign(el, comm);
+  if (!el.reel_packing_id) el.reel_packing_id = el.packing_type_id ?? el.reel_type_id ?? null;
 
   // Live masters for default fallbacks
   const _EDGE    = getLiveEdges();
@@ -1659,7 +1830,7 @@ function recalc(container) {
   if (el.ovr_sg_bottom         != null) overrides.sg_bottom         = el.ovr_sg_bottom;
   if (el.ovr_skim_rate         != null) overrides.skim_rate         = el.ovr_skim_rate;
   if (el.ovr_fabric_price      != null) overrides.fabric_price      = el.ovr_fabric_price;
-  if (el.ovr_fabric_gsm        != null) overrides.fabric_gsm        = el.ovr_fabric_gsm;
+
   if (el.ovr_breaker_top_gsm   != null) overrides.breaker_top_gsm   = el.ovr_breaker_top_gsm;
   if (el.ovr_breaker_bot_gsm   != null) overrides.breaker_bot_gsm   = el.ovr_breaker_bot_gsm;
   if (el.ovr_expenses_per_kg         != null) overrides.expenses_per_kg    = el.ovr_expenses_per_kg;
@@ -1668,12 +1839,82 @@ function recalc(container) {
   try {
     const result = runEngine(el, overrides);
     _currentResult = result;
+    _lineResults[_activeLineIdx] = result;
     renderResults(container, result);
   } catch (err) {
     const es = container.querySelector('#results-empty-state');
     if (es) es.style.display = 'none';
     container.querySelector('#results-warnings').innerHTML =
       `<div class="alert-banner"><p>⚠ Engine error: ${escHtml(err.message)}</p></div>`;
+  }
+}
+
+// Re-run engine for one stored (non-active) line using current shared commercial.
+// Used so every belt's _lineResults stays in sync the moment a commercial field changes
+// — without it, inactive belts keep stale COP/expense/freight/packing until you switch tabs.
+function recalcStoredLine(idx, comm) {
+  const stored = _lines[idx];
+  if (!stored) return;
+
+  const coreRequired = [
+    'belt_type_id', 'width_mm', 'fabric_type', 'fabric_strength', 'plies',
+    'top_cover_compound_id', 'top_cover_thickness_mm',
+    'bottom_cover_compound_id', 'bottom_cover_thickness_mm',
+  ];
+  if (coreRequired.some(k => !stored[k] && stored[k] !== 0)) return;
+
+  const el = { ...stored, ...comm };
+  if (!el.reel_packing_id) el.reel_packing_id = el.packing_type_id ?? el.reel_type_id ?? null;
+
+  const _EDGE = getLiveEdges();
+  const _CMPD = getLiveCompounds();
+  const _PACK = getLivePacking();
+
+  if (!el.edge_id) el.edge_id = _EDGE.find(r => r.active !== false)?.id;
+  if (!el.edge_id) return;
+
+  if (!el.skim_compound_id) {
+    const topCmpd  = _CMPD.find(r => r.id === el.top_cover_compound_id);
+    const compat   = topCmpd ? COVER_SKIM_COMPATIBILITY?.find(c => c.cover_grade_family === topCmpd.grade_family) : null;
+    const skimList = _CMPD.filter(r => r.roles?.split('|').includes('SKIM') && r.active !== false);
+    el.skim_compound_id = compat?.skim_compound_id ?? skimList[0]?.id;
+  }
+  if (!el.skim_compound_id) return;
+
+  if (!el.reel_packing_id) {
+    const defPack = _PACK.find(r => (r.applies_to === 'packing' || r.applies_to === 'both') && r.active !== false);
+    el.reel_packing_id = defPack?.id;
+  }
+  if (!el.reel_packing_id) return;
+
+  if (el.freight_included && !el.freight_id && !el.freight_cost_override) el.freight_included = false;
+  if (el.gp_pct_direct == null || el.gp_pct_direct === '') el.gp_pct_direct = 20;
+  if (!el.length_per_roll_m) el.length_per_roll_m = 100;
+  if (!el.no_of_rolls)       el.no_of_rolls = 1;
+
+  const overrides = {};
+  if (el.ovr_cover_rate_top    != null) overrides.cover_rate_top    = el.ovr_cover_rate_top;
+  if (el.ovr_cover_rate_bottom != null) overrides.cover_rate_bottom = el.ovr_cover_rate_bottom;
+  if (el.ovr_sg_top            != null) overrides.sg_top            = el.ovr_sg_top;
+  if (el.ovr_sg_bottom         != null) overrides.sg_bottom         = el.ovr_sg_bottom;
+  if (el.ovr_skim_rate         != null) overrides.skim_rate         = el.ovr_skim_rate;
+  if (el.ovr_fabric_price      != null) overrides.fabric_price      = el.ovr_fabric_price;
+  if (el.ovr_breaker_top_gsm   != null) overrides.breaker_top_gsm   = el.ovr_breaker_top_gsm;
+  if (el.ovr_breaker_bot_gsm   != null) overrides.breaker_bot_gsm   = el.ovr_breaker_bot_gsm;
+  if (el.ovr_expenses_per_kg   != null) overrides.expenses_per_kg   = el.ovr_expenses_per_kg;
+  if (el.customer_carcass_thickness_mm != null) overrides.carcass_thickness_mm = el.customer_carcass_thickness_mm;
+
+  try {
+    _lineResults[idx] = runEngine(el, overrides);
+  } catch {
+    // Keep previous good result on transient error
+  }
+}
+
+function recalcInactiveLines(comm) {
+  for (let i = 0; i < _lines.length; i++) {
+    if (i === _activeLineIdx) continue;
+    recalcStoredLine(i, comm);
   }
 }
 
@@ -1784,6 +2025,11 @@ function renderResults(container, result) {
   setText(container, '#rp-rmcvd-kg',    fRkg(p.material_cost_per_kg));
   setText(container, '#rp-rmcvd-tot',   fRs(c.material_cost));
 
+  const mfgPerKg = d.weight_per_meter_kg > 0 ? p.manufacturing_cost_per_m / d.weight_per_meter_kg : null;
+  setText(container, '#rp-mfg-pm',  fRpm(p.manufacturing_cost_per_m));
+  setText(container, '#rp-mfg-kg',  fRkg(mfgPerKg));
+  setText(container, '#rp-mfg-tot', fRs(p.manufacturing_cost_total));
+
   setText(container, '#rp-rmcgp-pm',    fRpm(p.cd_price_per_meter));
   setText(container, '#rp-rmcgp-kg',    fRkg(p.cd_price_per_kg));
   setText(container, '#rp-rmcgp-tot',   fRs(p.cd_total));
@@ -1813,6 +2059,9 @@ function renderResults(container, result) {
 
   setText(container, '#rp-total-quot-pm',  fRpm(p.vd_price_per_meter));
   setText(container, '#rp-total-quot-vd',  fRs(p.vd_total));
+
+  // ── Extended fields populated below ───────────────────────────────────────────
+  renderExtendedResults(container, result);
 
   // ── Skim compatibility card ───────────────────────────────────────────────────
   const skimCard = container.querySelector('#skim-match-card');
@@ -1923,6 +2172,164 @@ function renderResults(container, result) {
   updateDiscountResults(container, result);
 }
 
+// Extended live-panel population — Belt Spec chips, As-Used Rates, Geometry, Costing,
+// Pricing GP/per-mm, FX/USD, Special Note. Reads only from existing engine output.
+function renderExtendedResults(container, result) {
+  if (!result) return;
+  const i = result.inputs   ?? {};
+  const d = result.derived  ?? {};
+  const c = result.costs    ?? {};
+  const p = result.pricing  ?? {};
+  const s = result.snapshot ?? {};
+
+  const fRs   = v => v != null && v >= 0 ? formatRupees(v)            : '—';
+  const fRpm  = v => v != null && v >  0 ? formatRupees(v) + ' / m'   : '—';
+  const fRkg  = v => v != null && v >  0 ? formatRupees(v) + ' / kg'  : '—';
+  const fPct  = v => v != null ? (v * 100).toFixed(2) + ' %' : '—';
+  const fNum  = (v, dp = 2) => v != null && isFinite(v) ? v.toFixed(dp) : '—';
+
+  // ── Customer Special Note strip ──────────────────────────────────────────────
+  const noteVal = container.querySelector('[name="special_note"]')?.value?.trim();
+  const noteStrip = container.querySelector('#ro-special-note');
+  if (noteStrip) {
+    if (noteVal) {
+      noteStrip.style.display = '';
+      setText(container, '#ri-special-note', noteVal);
+    } else {
+      noteStrip.style.display = 'none';
+    }
+  }
+
+  // ── Belt Specification — extended chips ──────────────────────────────────────
+  const beltTypeRow = BELT_TYPE_MASTER.find(r => r.id === i.belt_type_id);
+  setText(container, '#ri-belt-type',          beltTypeRow?.name ?? i.belt_type_id ?? '—');
+  setText(container, '#ri-top-cmpd',           s.top_cover?.code    ?? '—');
+  setText(container, '#ri-bot-cmpd',           s.bottom_cover?.code ?? '—');
+  setText(container, '#ri-skim-cmpd',          s.skim?.code         ?? '—');
+
+  const fabricRow = FABRIC_STRENGTH_MASTER.find(r =>
+    r.fabric_type === i.fabric_type && r.total_strength === Number(i.fabric_strength) && r.no_of_ply === Number(i.plies)
+  );
+  const masterCct = fabricRow?.nominal_carcass_thickness_mm;
+  setText(container, '#ri-carcass-master', masterCct != null ? masterCct.toFixed(2) + ' mm' : '—');
+  setText(container, '#ri-cust-cct',       i.customer_carcass_thickness_mm != null ? Number(i.customer_carcass_thickness_mm).toFixed(2) + ' mm' : '—');
+  setText(container, '#ri-tbt-calc',        d.tbt_mm != null ? d.tbt_mm.toFixed(2) + ' mm' : '—');
+  setText(container, '#ri-cust-tbt',        i.customer_tbt_mm != null ? Number(i.customer_tbt_mm).toFixed(2) + ' mm' : '—');
+  setText(container, '#ri-edge',            s.edge?.name ?? i.edge_id ?? '—');
+
+  const construction = i.open_end_type === 'ENDLESS' ? 'Endless' : 'Open End';
+  setText(container, '#ri-construction',    construction);
+  setText(container, '#ri-endless-len',     i.open_end_type === 'ENDLESS' && i.endless_length_m ? `${i.endless_length_m} m` : '—');
+
+  setText(container, '#ri-bot-brk',         i.breaker_top_id ? `Yes · ${i.breaker_top_ply ?? '—'} ply` : 'No');
+  setText(container, '#ri-bob-brk',         i.breaker_bot_id ? `Yes · ${i.breaker_bot_ply ?? '—'} ply` : 'No');
+
+  setText(container, '#ri-reel-type',       s.reel?.code    ?? '—');
+  setText(container, '#ri-packing-type',    s.packing?.code ?? '—');
+
+  setText(container, '#ri-construction-grade', i.construction_grade ?? '—');
+  setText(container, '#ri-grade',              i.customer_grade     ?? '—');
+
+  setText(container, '#ri-lpr',             i.length_per_roll_m != null ? `${i.length_per_roll_m} m` : '—');
+  setText(container, '#ri-rolls',           i.no_of_rolls       != null ? String(i.no_of_rolls) : '—');
+
+  const shortForm = (i.fabric_type && i.fabric_strength && i.plies)
+    ? `${i.fabric_type}-${i.fabric_strength}/${i.plies}` : '—';
+  setText(container, '#ri-shortform',       shortForm);
+
+  const descParts = [
+    i.width_mm != null ? `${i.width_mm} mm` : null,
+    i.fabric_make || null,
+    i.fabric_type || null,
+    (i.fabric_strength != null && i.plies != null) ? `${i.fabric_strength}/${i.plies}` : null,
+    (i.top_cover_thickness_mm != null && i.bottom_cover_thickness_mm != null) ? `${i.top_cover_thickness_mm} × ${i.bottom_cover_thickness_mm}` : null,
+    s.edge?.name ?? null,
+    construction,
+    i.construction_grade ?? null,
+  ].filter(Boolean);
+  setText(container, '#ri-description',     descParts.length > 0 ? descParts.join(' × ') : '—');
+
+  // ── As-Used Rates block ──────────────────────────────────────────────────────
+  setText(container, '#rr-top-sg',       fNum(s.top_cover?.sg, 3));
+  setText(container, '#rr-top-rate',     fRkg(s.top_cover?.price_per_kg));
+  setText(container, '#rr-bot-sg',       fNum(s.bottom_cover?.sg, 3));
+  setText(container, '#rr-bot-rate',     fRkg(s.bottom_cover?.price_per_kg));
+  setText(container, '#rr-skim-sg',      fNum(s.skim?.sg, 3));
+  setText(container, '#rr-skim-rate',    fRkg(s.skim?.price_per_kg));
+
+  setText(container, '#rr-fabric-gsm',   d.fabric_gsm != null ? d.fabric_gsm.toFixed(1) + ' g/m²' : '—');
+  setText(container, '#rr-fabric-rate',  fRkg(s.fabric?.price_per_kg));
+
+  const brkTopRow = container.querySelector('#rr-brktop-row');
+  const brkBotRow = container.querySelector('#rr-brkbot-row');
+  if (brkTopRow) brkTopRow.style.display = s.breaker_top ? '' : 'none';
+  if (brkBotRow) brkBotRow.style.display = s.breaker_bot ? '' : 'none';
+  if (s.breaker_top) {
+    setText(container, '#rr-brktop-gsm',  s.breaker_top.gsm != null ? s.breaker_top.gsm.toFixed(1) + ' g/m²' : '—');
+    setText(container, '#rr-brktop-rate', fRkg(s.breaker_top.price_per_kg));
+  }
+  if (s.breaker_bot) {
+    setText(container, '#rr-brkbot-gsm',  s.breaker_bot.gsm != null ? s.breaker_bot.gsm.toFixed(1) + ' g/m²' : '—');
+    setText(container, '#rr-brkbot-rate', fRkg(s.breaker_bot.price_per_kg));
+  }
+  setText(container, '#rr-sg-blended',  fNum(d.sg_blended, 4));
+
+  setText(container, '#rr-cop-rate',        fRkg(s.eff_cop_rate_per_kg ?? s.cop_rate_per_kg));
+  setText(container, '#rr-expenses-kg',     fRkg(s.expenses_per_kg));
+  setText(container, '#rr-eff-prod',        fRkg(s.eff_production_rate_per_kg));
+  setText(container, '#rr-packing-pm',      fRpm(p.crate_cost_per_m));
+  setText(container, '#rr-reel-pm',         fRpm(p.reel_cost_per_m));
+  setText(container, '#rr-freight-dest',    s.freight?.state_name ?? '—');
+  setText(container, '#rr-freight-rate',    s.freight?.rate_per_kg != null ? fRkg(s.freight.rate_per_kg) : '—');
+
+  // ── Geometry (Weight block extension) ────────────────────────────────────────
+  setText(container, '#rw-eff-width',       d.effective_width_m  != null ? d.effective_width_m.toFixed(4)  + ' m' : '—');
+  setText(container, '#rw-eff-length',      d.effective_length_m != null ? d.effective_length_m.toFixed(3) + ' m' : '—');
+  setText(container, '#rw-width-factor',    fNum(d.width_factor, 4));
+  setText(container, '#rw-length-factor',   fNum(d.length_factor, 4));
+  setText(container, '#rw-compound-gsm',    d.compound_gsm != null ? d.compound_gsm.toFixed(1) + ' g/m²' : '—');
+  setText(container, '#rw-tbt-val',         d.tbt_mm != null ? d.tbt_mm.toFixed(2) + ' mm' : '—');
+
+  // ── Costing extensions ───────────────────────────────────────────────────────
+  setText(container, '#rc-cop-pm',          fRpm(c.cop_per_m));
+  setText(container, '#rc-cop-tot',         fRs(c.cost_of_production));
+  setText(container, '#rc-exp-pm',          fRpm(c.expenses_per_m));
+  setText(container, '#rc-exp-tot',         fRs(c.expenses_cost));
+  setText(container, '#rc-totcomp-pm',      fRpm(c.compound_cost_per_m));
+  setText(container, '#rc-totcomp-tot',     fRs(c.total_compound_cost));
+  setText(container, '#rc-fbtbob-pm',       fRpm(c.fabric_plus_breaker_cost_per_m));
+  setText(container, '#rc-fbtbob-tot',      fRs(c.fabric_plus_breaker_cost));
+  setText(container, '#rc-cmpd-price-kg',   fRkg(c.compound_price_per_kg));
+
+  // ── Pricing extensions ───────────────────────────────────────────────────────
+  setText(container, '#rp-gp-applied',      fPct(p.gp_pct_applied));
+  setText(container, '#rp-gp-effective',    fPct(p.effective_gp_pct_cd));
+  setText(container, '#rp-gp-value-cd',     fRs(p.gp_value_cd));
+  setText(container, '#rp-gp-value-vd',     fRs(p.gp_value_vd));
+  setText(container, '#rp-permm-cd',        p.per_mm_cd_price != null ? formatRupees(p.per_mm_cd_price) + ' / mm' : '—');
+  setText(container, '#rp-permm-vd',        p.per_mm_vd_price != null ? formatRupees(p.per_mm_vd_price) + ' / mm' : '—');
+  setText(container, '#rp-permm-prequote',  p.per_mm_running_price_pre_quote != null ? formatRupees(p.per_mm_running_price_pre_quote) + ' / mm' : '—');
+  setText(container, '#rp-rmc-with-gp',     fRpm(p.rmc_with_gp_per_m));
+  setText(container, '#rp-min-quoting',     fRpm(p.min_quotation_rmc_per_m));
+
+  // ── FX / USD pricing ─────────────────────────────────────────────────────────
+  const fxBlock = container.querySelector('#ro-fx-block');
+  const fxRate = Number(i.exchange_rate) || 0;
+  if (fxBlock) {
+    if (fxRate > 0) {
+      fxBlock.style.display = '';
+      setText(container, '#rfx-rate',       `₹${fxRate.toFixed(2)} / unit`);
+      setText(container, '#rfx-rmc-usd',    p.rmc_usd          != null ? `$${p.rmc_usd.toFixed(2)} / m`          : '—');
+      setText(container, '#rfx-cd-usd',     p.quotation_usd    != null ? `$${p.quotation_usd.toFixed(2)} / m`    : '—');
+      setText(container, '#rfx-vd-usd',     p.quotation_vd_usd != null ? `$${p.quotation_vd_usd.toFixed(2)} / m` : '—');
+      const totalUsd = p.cd_total != null && fxRate > 0 ? p.cd_total / fxRate : null;
+      setText(container, '#rfx-total-usd',  totalUsd != null ? `$${totalUsd.toFixed(2)}` : '—');
+    } else {
+      fxBlock.style.display = 'none';
+    }
+  }
+}
+
 function updateDiscountResults(container, result) {
   if (!result) return;
   const { pricing: p } = result;
@@ -1987,7 +2394,7 @@ function renderDetailedFields(container, result) {
     row('Short Form (Base Fabric)', d.base_fabric_code || '—'),
     row('Fabric Rating (per ply)', d.fabric_rating != null ? `${d.fabric_rating} N/mm/ply` : '—'),
     row('Combined Rating', combinedRating),
-    row('Fabric GSM', d.fabric_gsm != null ? `${d.fabric_gsm} g/m²` : '—'),
+
     row('Fabric Thickness (per ply)', d.fabric_thickness_mm != null ? `${d.fabric_thickness_mm} mm` : '—'),
 
     hdr('Construction'),
@@ -2067,26 +2474,26 @@ function renderDetailedFields(container, result) {
     hdr('Pricing'),
     row('Min. Quoting Price / m (RMC)', p.rmc_per_meter != null ? formatRupees(p.rmc_per_meter) + ' / m' : '—'),
     row('RMC With GP / m', p.rmc_with_gp_per_m != null ? formatRupees(p.rmc_with_gp_per_m) + ' / m' : '—'),
-    row('Min Quotation RMC / m', p.min_quotation_rmc_per_m != null ? formatRupees(p.min_quotation_rmc_per_m) + ' / m' : '—'),
+    row('Floor Price / m', p.min_quotation_rmc_per_m != null ? formatRupees(p.min_quotation_rmc_per_m) + ' / m' : '—'),
     row('Per mm Running Price (pre-quote)', p.per_mm_running_price_pre_quote != null ? formatRupees(p.per_mm_running_price_pre_quote) + ' / mm' : '—'),
     row('Material Cost / m (RMC VD)', c.material_cost_per_m != null ? formatRupees(c.material_cost_per_m) + ' / m' : '—'),
-    row('Selling Price / m (CD)', p.cd_price_per_meter != null ? formatRupees(p.cd_price_per_meter) + ' / m' : '—'),
+    row('Selling Price / m (Standard)', p.cd_price_per_meter != null ? formatRupees(p.cd_price_per_meter) + ' / m' : '—'),
     row('Selling Price / m (VD)', p.vd_price_per_meter != null ? formatRupees(p.vd_price_per_meter) + ' / m' : '—'),
     row('Per mm of Width (VD)', p.per_mm_vd_price != null ? formatRupees(p.per_mm_vd_price) + ' / m / mm' : '—'),
-    row('GP Value (CD)', p.gp_value_cd != null ? formatRupees(p.gp_value_cd) : '—'),
-    row('CD Total (full order)', p.cd_total != null ? formatRupees(p.cd_total) : '—'),
+    row('GP Value (Standard)', p.gp_value_cd != null ? formatRupees(p.gp_value_cd) : '—'),
+    row('Standard Total (full order)', p.cd_total != null ? formatRupees(p.cd_total) : '—'),
     row('VD Total (full order)', p.vd_total != null ? formatRupees(p.vd_total) : '—'),
     row('Discount %', i.discount_pct != null ? `${(i.discount_pct * 100).toFixed(1)}%` : '0%'),
-    row('Final CD / Meter', p.cd_final_per_meter != null ? formatRupees(p.cd_final_per_meter) + ' / m' : '—'),
-    row('Final CD Total', p.cd_final_total != null ? formatRupees(p.cd_final_total) : '—'),
+    row('Final Standard / Meter', p.cd_final_per_meter != null ? formatRupees(p.cd_final_per_meter) + ' / m' : '—'),
+    row('Final Standard Total', p.cd_final_total != null ? formatRupees(p.cd_final_total) : '—'),
     row('Min. Quotation Price / m (USD)', p.rmc_usd != null ? `$${p.rmc_usd.toFixed(2)} / m` : 'N/A'),
-    row('Quotation Rate / m USD (CD)', p.quotation_usd != null ? `$${p.quotation_usd.toFixed(2)} / m` : 'N/A'),
+    row('Quotation Rate / m USD (Standard)', p.quotation_usd != null ? `$${p.quotation_usd.toFixed(2)} / m` : 'N/A'),
     row('Quotation Rate / m USD (VD)', p.quotation_vd_usd != null ? `$${p.quotation_vd_usd.toFixed(2)} / m` : 'N/A'),
     row('Total RMC Amount', c.total_belt_cost != null ? formatRupees(c.total_belt_cost) : '—'),
-    row('Total Quotation Amount (CD)', p.cd_total != null ? formatRupees(p.cd_total) : '—'),
+    row('Total Quotation Amount (Standard)', p.cd_total != null ? formatRupees(p.cd_total) : '—'),
     row('Total RMC Cost VD (Material)', c.material_cost != null ? formatRupees(c.material_cost) : '—'),
     row('Total Quotation Cost VD', p.vd_total != null ? formatRupees(p.vd_total) : '—'),
-    row('Per MM Price (CD)', widthMm > 0 && p.cd_price_per_meter ? formatRupees(p.cd_price_per_meter / widthMm) + ' / m / mm' : '—'),
+    row('Per MM Price (Standard)', widthMm > 0 && p.cd_price_per_meter ? formatRupees(p.cd_price_per_meter / widthMm) + ' / m / mm' : '—'),
     row('Per MM Price (VD)', p.per_mm_vd_price != null ? formatRupees(p.per_mm_vd_price) + ' / m / mm' : '—'),
     row('Freight Charges (Old Pricing)', '₹0 — legacy reference'),
 
@@ -2129,41 +2536,6 @@ function showCostRow(container, rowId, valId, value) {
 function setText(container, sel, text) {
   const el = container.querySelector(sel);
   if (el) el.textContent = text;
-}
-
-// ─── Send for Approval modal ──────────────────────────────────────────────────
-
-function _showApprovalModal(container, quotation) {
-  const existing = container.querySelector('#approval-modal');
-  if (existing) existing.remove();
-
-  const q = quotation ?? {};
-  const refLabel = q.id ? `Ref: ${q.id}` : 'unsaved draft';
-
-  const overlay = document.createElement('div');
-  overlay.id = 'approval-modal';
-  overlay.style.cssText = `
-    position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;
-    display:flex;align-items:center;justify-content:center;
-  `;
-
-  overlay.innerHTML = `
-    <div style="background:#fff;border-radius:8px;padding:28px 32px;width:380px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.25);">
-      <h3 style="margin:0 0 8px;font-size:16px;font-weight:700;">Send for Approval</h3>
-      <p style="margin:0 0 16px;font-size:13px;color:#555;">${refLabel}</p>
-      <div style="background:#fef9e7;border:1px solid #f0c040;border-radius:6px;padding:12px 14px;font-size:13px;color:#7a6000;margin-bottom:20px;">
-        <strong>Coming soon</strong> — approver email address is not yet configured.<br>
-        Once configured, this will send the PDF quotation to the approver inbox.
-      </div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;">
-        <button class="btn btn-outline" id="approval-close">Close</button>
-      </div>
-    </div>
-  `;
-
-  container.appendChild(overlay);
-  overlay.querySelector('#approval-close').addEventListener('click', () => overlay.remove());
-  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 }
 
 // ─── Events ────────────────────────────────────────────────────────────────────
@@ -2244,6 +2616,44 @@ function setupEvents(container, quotation, isRevise) {
       if (hidden) hidden.value = val;
       recalc(container);
     });
+  });
+
+  // Belt line tab switching — works in both edit and read-only
+  container.querySelector('#qf-line-tabs')?.addEventListener('click', e => {
+    const removeSpan = e.target.closest('.qf-line-remove');
+    if (removeSpan && !_isReadOnly) {
+      e.stopPropagation();
+      removeLine(container, parseInt(removeSpan.dataset.remove));
+      return;
+    }
+    if (e.target.id === 'btn-add-line' && !_isReadOnly) {
+      addNewLine(container);
+      return;
+    }
+    const lineTab = e.target.closest('.qf-line-tab[data-line]');
+    if (lineTab) switchToLine(container, parseInt(lineTab.dataset.line));
+  });
+
+  // PDF, back, and revise — work in both edit and read-only
+  container.querySelector('#btn-back')?.addEventListener('click', () => {
+    window.dispatchEvent(new CustomEvent('ravasco:navigate', { detail: { view: 'quotations' } }));
+  });
+  container.querySelector('#btn-pdf')?.addEventListener('click', async () => {
+    if (!_isReadOnly) captureCurrentLine(container);
+    const anyResult = _lineResults.find(r => !!r);
+    if (!anyResult) { showToast('No calculation result found — fill in all required fields first.'); return; }
+    const pdfLines     = _lines.map((l, i) => ({ ...l, result: _lineResults[i] }));
+    const pdfQuotation = { ..._currentQuotation, lines: pdfLines };
+    const btn = container.querySelector('#btn-pdf');
+    if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+    try {
+      await openPrintWindow(pdfQuotation, _lineResults[_activeLineIdx] ?? anyResult);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Download'; }
+    }
+  });
+  container.querySelector('#btn-revise-btn')?.addEventListener('click', () => {
+    window.dispatchEvent(new CustomEvent('ravasco:navigate', { detail: { view: 'quotations', action: 'revise', id: _currentQuotation?.id } }));
   });
 
   if (_isReadOnly) return;
@@ -2375,19 +2785,31 @@ function setupEvents(container, quotation, isRevise) {
     });
   });
 
-  // Packing type → update packing cost display
-  container.querySelector('[name="packing_type_id"]')?.addEventListener('change', () => updateDerivedDisplays(container, null));
-
-  // Reel type → update reel cost display
-  container.querySelector('[name="reel_type_id"]')?.addEventListener('change', () => updateDerivedDisplays(container, null));
-
-  // Freight destination → auto-fill rate
-  container.querySelector('[name="freight_id"]')?.addEventListener('change', e => {
-    const row = getLiveFreight().find(r => r.id === e.target.value);
-    const input = container.querySelector('[name="freight_cost_override"]');
-    if (input && row) input.value = row.rate_per_kg.toFixed(2);
-    recalc(container);
-  });
+  // Shared commercial section — update _commercial and recalc on any change.
+  // Charges (COP, expense, packing, reel, freight) apply collectively across every belt:
+  // the active belt recalcs through the form, and every stored belt is re-run with the
+  // latest shared values so _lineResults always reflects the current commercial inputs.
+  const commSection = container.querySelector('#qf-commercial');
+  if (commSection) {
+    commSection.addEventListener('change', e => {
+      if (e.target.name === 'freight_id') {
+        const row = getLiveFreight().find(r => r.id === e.target.value);
+        const input = commSection.querySelector('[name="freight_cost_override"]');
+        if (input && row) input.value = row.rate_per_kg.toFixed(2);
+      }
+      if (e.target.name === 'packing_type_id' || e.target.name === 'reel_type_id') {
+        updateDerivedDisplays(container, null);
+      }
+      recalc(container);
+      recalcInactiveLines(_commercial);
+    });
+    commSection.addEventListener('input', e => {
+      if (e.target.tagName === 'INPUT' && (e.target.type === 'number' || e.target.type === 'text')) {
+        recalc(container);
+        recalcInactiveLines(_commercial);
+      }
+    });
+  }
 
   // Discount price type or % change → update final price display
   ['discount_price_type', 'discount_pct_input'].forEach(n => {
@@ -2436,23 +2858,6 @@ function setupEvents(container, quotation, isRevise) {
     });
   }
 
-  // Grade-family chips (§8.6) — filter cover compound dropdowns
-  container.querySelectorAll('#grade-chips-cover .chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      _gradeFilter = chip.dataset.gradeFilter ?? 'ALL';
-      container.querySelectorAll('#grade-chips-cover .chip').forEach(c => c.classList.toggle('active', c === chip));
-      // Re-populate cover compound selects with filter applied
-      const line = collectLine(container);
-      const _CMPD = getLiveCompounds();
-      const isCoverRole = r => { const rs = r.roles?.split('|') ?? []; return rs.includes('TOP_COVER') || rs.includes('BOTTOM_COVER'); };
-      const allCover   = _CMPD.filter(r => r.active !== false && isCoverRole(r));
-      const coverCmpds = _gradeFilter === 'ALL' ? allCover : allCover.filter(r => r.grade_family === _gradeFilter);
-      pop(container, '[name="top_cover_compound_id"]',    coverCmpds, 'id', 'name', line.top_cover_compound_id);
-      pop(container, '[name="bottom_cover_compound_id"]', coverCmpds, 'id', 'name', line.bottom_cover_compound_id);
-      recalc(container);
-    });
-  });
-
   // Overrides collapsible toggle (§8.7)
   container.querySelector('#overrides-toggle')?.addEventListener('click', () => {
     const body  = container.querySelector('#overrides-body');
@@ -2490,6 +2895,9 @@ function setupEvents(container, quotation, isRevise) {
     showToast(`Custom width request ${w} mm submitted. Awaiting Admin approval.`);
   });
 
+  // + Belt Spec header button
+  container.querySelector('#btn-add-belt-header')?.addEventListener('click', () => addNewLine(container));
+
   // Save / Send
   container.querySelector('#btn-save')?.addEventListener('click', () => saveQuotation(container, quotation, 'draft', isRevise));
   container.querySelector('#btn-send')?.addEventListener('click', () => {
@@ -2503,25 +2911,6 @@ function setupEvents(container, quotation, isRevise) {
       saveQuotation(container, quotation, 'sent', isRevise);
     }
   });
-  container.querySelector('#btn-back')?.addEventListener('click', () => {
-    window.dispatchEvent(new CustomEvent('ravasco:navigate', { detail: { view: 'quotations' } }));
-  });
-  container.querySelector('#btn-pdf')?.addEventListener('click', () => {
-    if (!_currentResult) { showToast('No calculation result found — fill in all required fields first.'); return; }
-    openPrintWindow(_currentQuotation, _currentResult);
-  });
-  container.querySelector('#btn-approve')?.addEventListener('click', () => {
-    if (!_currentResult) { showToast('Complete all required fields first — results update live.'); return; }
-    _showApprovalModal(container, _currentQuotation);
-  });
-  container.querySelector('#btn-email')?.addEventListener('click', () => {
-    if (!_currentResult) { showToast('No calculation result found — open the quotation and recalculate first.'); return; }
-    openEmailModal(_currentQuotation, _currentResult);
-  });
-  container.querySelector('#btn-revise-btn')?.addEventListener('click', () => {
-    window.dispatchEvent(new CustomEvent('ravasco:navigate', { detail: { view: 'quotations', action: 'revise', id: _currentQuotation?.id } }));
-  });
-
   // WON / LOST lifecycle buttons
   container.querySelector('#btn-won')?.addEventListener('click', () => {
     if (confirm('Mark this quotation as WON?')) markOutcome(quotation, 'won');
@@ -2534,22 +2923,37 @@ function setupEvents(container, quotation, isRevise) {
 // ─── Save ──────────────────────────────────────────────────────────────────────
 
 function saveQuotation(container, quotation, status, isRevise) {
+  captureCurrentLine(container);
+
   const customerOptionKey = container.querySelector('[name="customer_id"]')?.value;
   if (!customerOptionKey) { showToast('Select a customer first.'); return; }
   const { customer_id: customerId, location_id: customerLocationId } = parseOptionKey(customerOptionKey);
 
-  const line      = collectLine(container);
   const isSending = status === 'sent';
-  if (isSending && !_currentResult) { showToast('Complete all required fields first — results must be live before sending.'); return; }
-
-  const lineWithResult = { ...line, result: _currentResult };
-  if (isSending && _currentResult) {
-    lineWithResult.frozen_snapshot = _currentResult.snapshot;
-    lineWithResult.frozen_at       = new Date().toISOString();
+  if (isSending) {
+    const incompleteIdx = _lineResults.findIndex(r => !r);
+    if (incompleteIdx !== -1) {
+      showToast(`Belt ${incompleteIdx + 1} has no result yet — complete all belts before sending.`);
+      if (incompleteIdx !== _activeLineIdx) switchToLine(container, incompleteIdx);
+      return;
+    }
   }
+
+  const allLines = _lines.map((ln, i) => {
+    const res = _lineResults[i];
+    const lwr = { ...ln, result: res };
+    if (isSending && res) {
+      lwr.frozen_snapshot = res.snapshot;
+      lwr.frozen_at       = new Date().toISOString();
+    }
+    return lwr;
+  });
 
   const existingId = quotation?.id;
   const qtnId = existingId ?? nextQuotationId();
+
+  // Capture commercial from the shared section before saving
+  _commercial = collectCommercial(container);
 
   const record = {
     id:           qtnId,
@@ -2558,18 +2962,32 @@ function saveQuotation(container, quotation, status, isRevise) {
     enquiry_id:   container.querySelector('[name="enquiry_id"]')?.value || null,
     special_note: container.querySelector('[name="special_note"]')?.value?.trim() || null,
     status,
-    lines:        [lineWithResult],
-    warnings:     _currentResult?.warnings ?? [],
+    commercial:   { ..._commercial },
+    lines:        allLines,
+    warnings:     _lineResults.flatMap(r => r?.warnings ?? []),
     created_at:   quotation?.created_at ?? new Date().toISOString(),
     updated_at:   new Date().toISOString(),
     ...(isSending ? { sent_at: new Date().toISOString() } : {}),
   };
 
   storageSet(`quotation.${qtnId}`, record);
-  auditLog({ entity: 'quotation', entity_id: qtnId, action: isSending ? 'sent' : isRevise ? 'revised' : (existingId ? 'edited' : 'created'), diff: { status } });
-  if (isSending && line.gp_pct_direct != null && Number(line.gp_pct_direct) < 20) {
-    auditLog({ entity: 'quotation', entity_id: qtnId, action: 'override_applied', diff: { gp_pct: Number(line.gp_pct_direct), floor: 20, note: 'GP below 20% minimum — approved at send' } });
+  auditLog({ entity: 'quotation', entity_id: qtnId, action: isSending ? 'sent' : isRevise ? 'revised' : (existingId ? 'edited' : 'created'), diff: { status, line_count: allLines.length } });
+
+  // Auto-flip the previous revision's status to 'revised' when a new revision is saved.
+  if (isRevise && quotation?.previous_revision_id) {
+    const prevRecord = storageGet(`quotation.${quotation.previous_revision_id}`);
+    if (prevRecord && !['won', 'lost'].includes(prevRecord.status)) {
+      prevRecord.status     = 'revised';
+      prevRecord.updated_at = new Date().toISOString();
+      storageSet(`quotation.${quotation.previous_revision_id}`, prevRecord);
+      auditLog({ entity: 'quotation', entity_id: quotation.previous_revision_id, action: 'superseded', diff: { status: 'revised', by: qtnId } });
+    }
   }
+  allLines.forEach((ln, i) => {
+    if (isSending && ln.gp_pct_direct != null && Number(ln.gp_pct_direct) < 20) {
+      auditLog({ entity: 'quotation', entity_id: qtnId, action: 'override_applied', diff: { line: i + 1, gp_pct: Number(ln.gp_pct_direct), floor: 20, note: 'GP below 20% minimum — approved at send' } });
+    }
+  });
   showToast(isSending ? `Quotation ${qtnId} sent and frozen.` : `Quotation ${qtnId} saved as draft.`);
   window.dispatchEvent(new CustomEvent('ravasco:navigate', { detail: { view: 'quotations', action: 'view', id: qtnId } }));
 }
@@ -2589,13 +3007,73 @@ function markOutcome(quotation, outcome) {
   window.dispatchEvent(new CustomEvent('ravasco:navigate', { detail: { view: 'quotations', action: 'view', id: quotation.id } }));
 }
 
+// ─── Revision history banner ───────────────────────────────────────────────────
+
+function renderRevisionHistory(container, currentId) {
+  if (!currentId) return;
+
+  const baseId = currentId.replace(/-R\d+$/, '');
+  const allQuotations = storageGetAll('quotation.');
+
+  // Collect all revisions in the same chain (base + base-R1, base-R2, …)
+  const chain = allQuotations
+    .filter(q => q.id === baseId || q.id.startsWith(baseId + '-R'))
+    .sort((a, b) => {
+      const revA = a.id.match(/-R(\d+)$/)?.[1] ?? '0';
+      const revB = b.id.match(/-R(\d+)$/)?.[1] ?? '0';
+      return parseInt(revA) - parseInt(revB);
+    });
+
+  if (chain.length <= 1) return; // no revisions — nothing to show
+
+  const badgeClass = s => `badge badge-${s}`;
+  const items = chain.map(q => {
+    const revMatch = q.id.match(/-R(\d+)$/);
+    const label = revMatch ? `Rev ${revMatch[1]}` : 'Original';
+    const isCurrent = q.id === currentId;
+    return `
+      <span class="rev-chain-item${isCurrent ? ' rev-chain-current' : ''}">
+        ${isCurrent
+          ? `<span class="rev-chain-label">${escHtml(label)}</span>`
+          : `<a href="#" class="rev-chain-link" data-nav-id="${escHtml(q.id)}">${escHtml(label)}</a>`
+        }
+        <span class="${badgeClass(q.status)}" style="font-size:9px;padding:1px 5px">${q.status}</span>
+      </span>`;
+  }).join('<span class="rev-chain-sep">›</span>');
+
+  const banner = document.createElement('div');
+  banner.className = 'rev-history-bar';
+  banner.innerHTML = `
+    <span class="rev-history-label">Revision chain:</span>
+    <span class="rev-chain">${items}</span>
+  `;
+
+  // Insert after the topbar
+  const topbar = container.querySelector('.qf-topbar');
+  if (topbar?.nextSibling) {
+    container.querySelector('.qf-shell')?.insertBefore(banner, topbar.nextSibling);
+  } else {
+    container.querySelector('.qf-shell')?.appendChild(banner);
+  }
+
+  banner.querySelectorAll('.rev-chain-link').forEach(a => {
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent('ravasco:navigate', {
+        detail: { view: 'quotations', action: 'view', id: a.dataset.navId },
+      }));
+    });
+  });
+}
+
 // ─── Lock / Revise ─────────────────────────────────────────────────────────────
 
 function lockForm(container) {
   container.querySelectorAll('select, input, button').forEach(el => {
-    if (['btn-back', 'btn-revise-btn', 'btn-pdf', 'btn-email', 'btn-won', 'btn-lost'].includes(el.id)) return;
+    if (['btn-back', 'btn-revise-btn', 'btn-pdf', 'btn-won', 'btn-lost'].includes(el.id)) return;
     if (el.classList.contains('qf-bd-tab')) return;
     if (el.classList.contains('qf-step')) return;
+    if (el.classList.contains('qf-line-tab')) return;  // allow tab switching in view mode
     if (el.closest('.qf-phase-head')) return;
     if (el.closest('[data-cvrtab]')) return;
     el.disabled = true;
@@ -2614,6 +3092,150 @@ function createRevision(original) {
     created_at:           new Date().toISOString(),
     lines: (original.lines ?? []).map(l => ({ ...l, frozen_snapshot: undefined, frozen_at: undefined, result: undefined })),
   };
+}
+
+// ─── Multi-line management ─────────────────────────────────────────────────────
+
+function initLines(quotation) {
+  const src = quotation?.lines;
+  _lines       = (src && src.length > 0) ? src.map(l => ({ ...l })) : [{}];
+  _lineResults = _lines.map(l => l.result ?? null);
+  _activeLineIdx = 0;
+}
+
+function captureCurrentLine(container) {
+  if (_isReadOnly) return;
+  _lines[_activeLineIdx]       = collectLine(container);
+  _lineResults[_activeLineIdx] = _currentResult;
+}
+
+function loadLineIntoForm(container, line, result) {
+  // Set plain <input> values (selects are handled by populateAllDropdowns below)
+  const setInp = (name, val) => {
+    const el = container.querySelector(`[name="${name}"]`);
+    if (el && el.tagName !== 'SELECT') el.value = val ?? '';
+  };
+  setInp('width_mm',                       line.width_mm ?? '');
+  setInp('width_id',                       line.width_id ?? '');
+  setInp('endless_length_m',               line.endless_length_m ?? '');
+  setInp('length_per_roll_m',              line.length_per_roll_m ?? '');
+  setInp('no_of_rolls',                    line.no_of_rolls ?? '');
+  setInp('exchange_rate',                  line.exchange_rate ?? '');
+  setInp('gp_pct_direct',                  line.gp_pct_direct ?? '');
+  setInp('discount_pct_input',             line.discount_pct != null ? +(line.discount_pct * 100).toFixed(4) : '');
+  setInp('custom_final_price_per_m',       line.custom_final_price_per_m ?? '');
+  setInp('ovr_cover_rate_top',             line.ovr_cover_rate_top ?? '');
+  setInp('ovr_cover_rate_bottom',          line.ovr_cover_rate_bottom ?? '');
+  setInp('ovr_sg_top',                     line.ovr_sg_top ?? '');
+  setInp('ovr_sg_bottom',                  line.ovr_sg_bottom ?? '');
+  setInp('ovr_skim_rate',                  line.ovr_skim_rate ?? '');
+  setInp('ovr_fabric_price',               line.ovr_fabric_price ?? '');
+
+  setInp('customer_carcass_thickness_mm',  line.customer_carcass_thickness_mm ?? '');
+  setInp('customer_tbt_mm',                line.customer_tbt_mm ?? '');
+  setInp('breaker_top_ply',                line.breaker_top_ply ?? '');
+  setInp('ovr_breaker_top_gsm',            line.ovr_breaker_top_gsm ?? '');
+  setInp('breaker_bot_ply',                line.breaker_bot_ply ?? '');
+  setInp('ovr_breaker_bot_gsm',            line.ovr_breaker_bot_gsm ?? '');
+
+  // Unit-system toggle
+  const unitSys  = line.unit_system ?? 'metric';
+  setInp('unit_system', unitSys);
+  container.querySelectorAll('#unit-toggle .qf-unit-opt').forEach(b => b.classList.toggle('on', b.dataset.unit === unitSys));
+
+  // Open-end / Endless toggle
+  const endType = line.open_end_type ?? 'OPEN_END';
+  setInp('open_end_type', endType);
+  container.querySelectorAll('#end-type-toggle .qf-unit-opt').forEach(b => b.classList.toggle('on', b.dataset.unit === endType));
+  const lengthRow = container.querySelector('#endless-length-row');
+  if (lengthRow) lengthRow.style.display = endType === 'ENDLESS' ? 'block' : 'none';
+
+  // Breaker-on-top toggle
+  const brkTopOn = !!line.breaker_top_id;
+  setInp('breaker_top_enabled', brkTopOn ? 'yes' : 'no');
+  container.querySelectorAll('#breaker-top-toggle .qf-unit-opt').forEach(b => b.classList.toggle('on', b.dataset.unit === (brkTopOn ? 'yes' : 'no')));
+  const brkTopSub = container.querySelector('#breaker-top-sub');
+  if (brkTopSub) brkTopSub.style.display = brkTopOn ? 'block' : 'none';
+
+  // Breaker-on-bottom toggle
+  const brkBotOn = !!line.breaker_bot_id;
+  setInp('breaker_bot_enabled', brkBotOn ? 'yes' : 'no');
+  container.querySelectorAll('#breaker-bot-toggle .qf-unit-opt').forEach(b => b.classList.toggle('on', b.dataset.unit === (brkBotOn ? 'yes' : 'no')));
+  const brkBotSub = container.querySelector('#breaker-bot-sub');
+  if (brkBotSub) brkBotSub.style.display = brkBotOn ? 'block' : 'none';
+
+  // Discount toggle
+  const discOn = (line.discount_pct ?? 0) > 0;
+  setInp('discount_enabled', discOn ? 'yes' : 'no');
+  container.querySelectorAll('[data-target="discount-fields"] .qf-unit-opt').forEach(b => b.classList.toggle('on', b.dataset.unit === (discOn ? 'yes' : 'no')));
+  const discFields = container.querySelector('#discount-fields');
+  if (discFields) discFields.style.display = discOn ? 'block' : 'none';
+
+  // Populate all select dropdowns (handles cover compounds, edge toggle, currency, etc.)
+  populateAllDropdowns(container, line);
+
+  // Restore result or trigger live recalc
+  _currentResult = result ?? null;
+  if (_currentResult) {
+    renderResults(container, _currentResult);
+  } else {
+    const es = container.querySelector('#results-empty-state');
+    if (es) es.style.display = '';
+    const rw = container.querySelector('#results-warnings');
+    if (rw) rw.innerHTML = '';
+    recalc(container);
+  }
+}
+
+function switchToLine(container, idx) {
+  if (idx === _activeLineIdx) return;
+  captureCurrentLine(container);
+  _activeLineIdx = idx;
+  _currentResult = _lineResults[idx] ?? null;
+  container.querySelectorAll('.qf-line-tab[data-line]').forEach(t =>
+    t.classList.toggle('active', parseInt(t.dataset.line) === idx));
+  loadLineIntoForm(container, _lines[idx] ?? {}, _lineResults[idx] ?? null);
+}
+
+function addNewLine(container) {
+  captureCurrentLine(container);
+  _lines.push({});
+  _lineResults.push(null);
+  _activeLineIdx = _lines.length - 1;
+  _currentResult = null;
+  renderLineTabs(container);
+  loadLineIntoForm(container, {}, null);
+}
+
+function removeLine(container, idx) {
+  if (_lines.length <= 1) { showToast('A quotation must have at least one belt line.'); return; }
+  if (!confirm(`Remove Belt ${idx + 1}? This cannot be undone.`)) return;
+  captureCurrentLine(container);
+  _lines.splice(idx, 1);
+  _lineResults.splice(idx, 1);
+  _activeLineIdx = Math.min(_activeLineIdx, _lines.length - 1);
+  _currentResult = _lineResults[_activeLineIdx] ?? null;
+  renderLineTabs(container);
+  loadLineIntoForm(container, _lines[_activeLineIdx] ?? {}, _lineResults[_activeLineIdx] ?? null);
+}
+
+function renderLineTabs(container) {
+  const el = container.querySelector('#qf-line-tabs');
+  if (el) el.innerHTML = buildLineTabsHTML(_lines.length, _activeLineIdx, _isReadOnly);
+}
+
+function buildLineTabsHTML(count, activeIdx, isReadOnly) {
+  let html = '';
+  for (let i = 0; i < count; i++) {
+    const removeHtml = count > 1 && !isReadOnly
+      ? `<span class="qf-line-remove" data-remove="${i}" title="Remove belt ${i + 1}">×</span>`
+      : '';
+    html += `<button class="qf-line-tab${i === activeIdx ? ' active' : ''}" data-line="${i}" type="button">Belt ${i + 1}${removeHtml}</button>`;
+  }
+  if (!isReadOnly) {
+    html += `<button class="qf-line-tab qf-line-add" id="btn-add-line" type="button">+ Add Belt</button>`;
+  }
+  return html;
 }
 
 // ─── Utilities ─────────────────────────────────────────────────────────────────

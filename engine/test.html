@@ -94,8 +94,8 @@
       results.push(assert('Freight cost',               c.freight_cost,                125778,   '₹', 10));
       results.push(assert('Total belt cost',            c.total_belt_cost,             3339183,  '₹', 5));
       results.push(assert('RMC per meter',              p.rmc_per_meter,               3339.18,  '₹/m', 0.5));
-      // CD and VD use MROUND to nearest ₹5 — oracle pre-MROUND values are 4507.90 and 4286.39
-      results.push(assert('CD price per meter (MROUND)',p.cd_price_per_meter,          4510,     '₹/m', 5));
+      // Standard and VD use MROUND to nearest ₹5 — oracle pre-MROUND values are 4507.90 and 4286.39
+      results.push(assert('Standard price per meter (MROUND)',p.cd_price_per_meter,          4510,     '₹/m', 5));
       results.push(assert('VD price per meter (MROUND)',p.vd_price_per_meter,          4285,     '₹/m', 5));
 
       // Individual component weight checks

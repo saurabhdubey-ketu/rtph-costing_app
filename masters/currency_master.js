@@ -25,7 +25,7 @@ export const CURRENCY_FIELDS = Object.freeze([
 // ---------------------------------------------------------------------------
 export const CURRENCY_DEFAULTS = Object.freeze([
   { id: 'CUR-0001', code: 'INR', name: 'Indian Rupee',   symbol: '₹', exchange_rate: 1 },
-  { id: 'CUR-0002', code: 'USD', name: 'US Dollar',      symbol: '$', exchange_rate: 84 },
+  { id: 'CUR-0002', code: 'USD', name: 'US Dollar',      symbol: '$', exchange_rate: 0 },
   { id: 'CUR-0003', code: 'EUR', name: 'Euro',           symbol: '€', exchange_rate: 91 },
   { id: 'CUR-0004', code: 'GBP', name: 'British Pound',  symbol: '£', exchange_rate: 107 },
 ]);

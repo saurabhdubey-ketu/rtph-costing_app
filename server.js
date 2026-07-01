@@ -17,6 +17,12 @@ const EMAIL_CFG     = path.join(DATA_DIR, 'email-config.json');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
+// ── Brand assets — loaded once at startup, embedded as data URIs in generated PDFs ──
+const LOGO_PATH = path.join(ROOT, 'assets', 'icons', 'indus_logo.png');
+const LOGO_DATA_URI = fs.existsSync(LOGO_PATH)
+  ? `data:image/png;base64,${fs.readFileSync(LOGO_PATH).toString('base64')}`
+  : '';
+
 // ── Email config helpers ──────────────────────────────────────────────────────
 function readEmailCfg() {
   try { return JSON.parse(fs.readFileSync(EMAIL_CFG, 'utf-8')); }
@@ -26,22 +32,33 @@ function writeEmailCfg(cfg) {
   fs.writeFileSync(EMAIL_CFG, JSON.stringify(cfg, null, 2), 'utf-8');
 }
 
-// ── Find Edge browser (for PDF generation) ────────────────────────────────────
-const EDGE_PATHS = [
+// ── Find a Chromium-based browser for PDF generation ─────────────────────────
+const BROWSER_PATHS = [
+  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  process.env.LOCALAPPDATA && `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-];
-function findEdge() {
+].filter(Boolean);
+
+function findBrowser() {
   const cfg = readEmailCfg();
   if (cfg?.browserPath && fs.existsSync(cfg.browserPath)) return cfg.browserPath;
-  return EDGE_PATHS.find(p => fs.existsSync(p)) ?? null;
+  return BROWSER_PATHS.find(p => fs.existsSync(p)) ?? null;
 }
 
-// ── Generate PDF from HTML using Edge + puppeteer-core ────────────────────────
+// ── Generate PDF from HTML using Chrome/Edge + puppeteer-core ─────────────────
 async function htmlToPdf(html) {
   const puppeteer = require('puppeteer-core');
-  const executablePath = findEdge();
-  if (!executablePath) throw new Error('Microsoft Edge not found. Install Edge or set browserPath in email settings.');
+  const executablePath = findBrowser();
+  if (!executablePath) throw new Error('No browser found for PDF generation. Install Chrome or Edge.');
+
+  // Inline brand assets — puppeteer's setContent has no base URL, so relative
+  // paths won't resolve. Swap the canonical logo URL for a data URI so the
+  // document is fully self-contained at render time.
+  const inlined = LOGO_DATA_URI
+    ? html.split('/assets/icons/indus_logo.png').join(LOGO_DATA_URI)
+    : html;
 
   const browser = await puppeteer.launch({
     executablePath,
@@ -50,7 +67,7 @@ async function htmlToPdf(html) {
   });
   try {
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
+    await page.setContent(inlined, { waitUntil: 'networkidle0', timeout: 30000 });
     return await page.pdf({
       format: 'A4',
       printBackground: true,
@@ -229,6 +246,25 @@ const server = http.createServer(async (req, res) => {
       await sendEmail(payload);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end('{"ok":true}');
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: e.message }));
+    }
+    return;
+  }
+
+  // ── POST /api/pdf  — generate PDF and stream as download ─────────────────
+  if (req.method === 'POST' && url === '/api/pdf') {
+    try {
+      const { html, filename } = JSON.parse(await readBody(req));
+      const pdfBuffer = await htmlToPdf(html);
+      const safe = (filename || 'quotation').replace(/[^a-zA-Z0-9\-_. ]/g, '_');
+      res.writeHead(200, {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${safe}.pdf"`,
+        'Content-Length': pdfBuffer.length,
+      });
+      res.end(pdfBuffer);
     } catch (e) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: e.message }));

@@ -1,6 +1,6 @@
 // engine/pricing.js
 // Source: 04-calculation-engine.md §Pricing ladder — locked with Jitesh.
-// CD = Standard pricing: GP% applied on FULL total_belt_cost.
+// Standard = Standard pricing: GP% applied on FULL total_belt_cost.
 // VD = GP% applied on MATERIAL cost only (covers+fabric+skim+breakers).
 //      Production, packing, freight are passed through at cost.
 // Do NOT write "Variable Direct" anywhere — label is "VD".
