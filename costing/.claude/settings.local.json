@@ -13,7 +13,8 @@
       "Bash(python scripts/extract-text.py \"C:\\\\Users\\\\Admin\\\\Downloads\\\\CUSTOMER ADDRESS -SAP.xlsx\")",
       "Bash(python \"C:\\\\Users\\\\Admin\\\\AppData\\\\Roaming\\\\Claude\\\\local-agent-mode-sessions\\\\skills-plugin\\\\4a11d30e-6e6a-473a-ae9e-dd0b99cbaabb\\\\b0540db1-640d-40f2-bd11-9c483e4963bf\\\\skills\\\\xlsx\\\\scripts\\\\extract-text.py\" \"C:\\\\Users\\\\Admin\\\\Downloads\\\\CUSTOMER ADDRESS -SAP.xlsx\")",
       "PowerShell(python3 \"C:\\\\Users\\\\Admin\\\\AppData\\\\Roaming\\\\Claude\\\\local-agent-mode-sessions\\\\skills-plugin\\\\4a11d30e-6e6a-473a-ae9e-dd0b99cbaabb\\\\b0540db1-640d-40f2-bd11-9c483e4963bf\\\\skills\\\\xlsx\\\\scripts\\\\extract-text.py\" \"C:\\\\Users\\\\Admin\\\\Downloads\\\\CUSTOMER ADDRESS -SAP.xlsx\" 2>&1)",
-      "Bash(node tests/generate_15.mjs)"
+      "Bash(node tests/generate_15.mjs)",
+      "Bash(git ls-tree *)"
     ]
   }
 }
