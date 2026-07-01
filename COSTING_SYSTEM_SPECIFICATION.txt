@@ -1,0 +1,950 @@
+================================================================================
+          RAVASCO CONVEYOR BELT COSTING SYSTEM — FULL SPECIFICATION
+                   Compiled from design sessions with Saurabh Dubey
+                              Last updated: 2026-06-16
+================================================================================
+
+  This document is the single authoritative reference for the costing engine,
+  master data architecture, form structure, and all calculation rules.
+  Everything marked LOCKED has been explicitly confirmed and must not be
+  changed without a conscious decision. Open questions are flagged clearly.
+
+================================================================================
+  TABLE OF CONTENTS
+================================================================================
+
+  1.  MASTER DATA ARCHITECTURE
+        1.1  Overview of Masters
+        1.2  Fabric Rating Master  ← primary subject of latest sessions
+        1.3  Supporting Masters (field-level detail)
+
+  2.  COSTING FORM STRUCTURE
+        2.1  Header Inputs & Field Sources
+        2.2  Four Carcass / Total Belt Thickness Scenarios
+        2.3  Cover Inputs
+        2.4  Breaker Inputs
+        2.5  Grade System (3-Grade Model)
+        2.6  Quantity Inputs
+
+  3.  COSTING ENGINE — CALCULATION RULES
+        3.1  Two Formula Families
+        3.2  Effective Width & Effective Length
+        3.3  Full Layer Inventory
+        3.4  Cover Calculation (Two-Component Model)  ← LOCKED
+        3.5  Fabric / Carcass Weight
+        3.6  Skim Calculation (Remainder Method)      ← LOCKED
+        3.7  Total Belt Weight Equation
+        3.8  Non-Mass Cost Components
+
+  4.  LOCKED ARCHITECTURAL RULES
+
+  5.  OPEN QUESTIONS (Pending Confirmation)
+
+
+================================================================================
+  SECTION 1 — MASTER DATA ARCHITECTURE
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+  1.1  OVERVIEW OF MASTERS
+────────────────────────────────────────────────────────────────────────────────
+
+  All masters follow a consistent CRUD pattern: Add / Modify / Delete / Search.
+  Records are persisted in localStorage, keyed by a prefixed ID (e.g. SUP-0001).
+  Each save generates an audit log entry. Soft-delete via active = false flag.
+
+  EXISTING MASTERS (files confirmed in codebase)
+  ───────────────────────────────────────────────
+  File                          Key Prefix     Purpose
+  ────────────────────────────  ─────────────  ──────────────────────────────────
+  width_master.js               width.         Belt width options
+  length_master.js              length.        Roll length options
+  supplier_master.js            supplier.      Fabric/material suppliers
+  fabric_type_master.js         fabric_type.   Fabric type codes (NN, EP, EE…)
+  fabric_strength_master.js     —              547 fabric configurations (static)
+  fabric_rate_master.js         —              GSM, thickness, ₹/kg per ply rating
+  fabric_supplier_master.js     fabric_supp.   Supplier + fabric + internal codes
+  belt_rating_master.js         belt_rating.   Belt rating combinations (CRUD)
+  cover_thickness_master.js     cover.         Cover thickness options, role-based
+  breaker_master.js             breaker.       Breaker fabric options, role-based
+  compound_master.js            compound.      Rubber compounds, SG, ₹/kg, roles
+  grade_master.js               grade.         Grade system (Indus/Customer/Costing)
+  belt_type_master.js           belt_type.     Belt types + component declarations
+  reel_packing_master.js        reel_packing.  Packing cost per metre or per reel
+  freight_master.js             freight.       Freight ₹/kg by state / customer
+  customer_master.js            customer.      Customer records
+  product_master.js             product.       Product catalogue
+  gp_master.js                  gp.            GP / margin table
+
+
+────────────────────────────────────────────────────────────────────────────────
+  1.2  FABRIC RATING MASTER
+────────────────────────────────────────────────────────────────────────────────
+
+  Purpose
+  ───────
+  The Fabric Rating Master links a specific supplier's fabric product to a belt
+  rating specification. It is the bridge between the supplier world (make, code,
+  GSM) and the engineering world (belt strength, plies, thickness).
+
+  Operations: Add / Modify / Delete / Search
+  Measurement systems: Metric (primary) and Imperial (display only)
+
+  FIELD SOURCES — METRIC SYSTEM
+  ──────────────────────────────
+
+  Field                       Source                            Notes
+  ──────────────────────────  ────────────────────────────────  ──────────────────────────────────────
+  Select Make                 supplier_master                   Fabric manufacturer / origin
+                                                                (e.g. "Wuhu China")
+
+  Select Belt Rating          belt_rating_master                Code format: {type}-{strength}/{ply}
+                                                                (e.g. "NN-315/3")
+
+  Select Fabric Type          Auto-filled from belt rating      Derived: e.g. "NN"
+
+  Select Breaking Strength    Auto-filled from belt rating      Derived: total_strength field
+                                                                (e.g. 315)
+
+  Select Fabric Code          fabric_supplier_master            internal_material_code field
+                              .internal_material_code           (e.g. "NN100WH")
+
+  Individual Ply Rating       individual_ply_rating_master      COMMERCIAL / QUOTATION value
+  (Quotation Purposes)                                          (rounded, e.g. 100)
+                                                                ≠ per_ply_rating in
+                                                                  fabric_strength_master
+
+  Per Ply Rating (actual)     fabric_strength_master            Exact calculated value
+                              .per_ply_rating                   (e.g. 105.0 for NN-315/3)
+
+  Select Number of Ply        Auto-filled from belt rating      Derived: no_of_ply field
+
+  Fabric GSM                  fabric_rate_master.grades         Lookup key:
+                              .gsm                              fabric_type + individual_ply_rating
+                                                                (e.g. NN + 100 → 300 GSM)
+                                                                NOT user-entered.
+
+  Inter-Ply Thickness         fabric_rate_master.grades         Same lookup key as GSM.
+  (default)                   .thickness_mm                     NOT user-entered.
+
+  Carcass Thickness           fabric_strength_master            nominal_carcass_thickness_mm
+  (default)                   .nominal_carcass_thickness_mm     field in fabric_strength_master.
+                                                                This resolves the pending note
+                                                                from earlier sessions.
+
+  CUSTOMER OVERRIDE FIELDS
+  ─────────────────────────
+  These fields are optional. When present, they override the master-driven defaults
+  in all calculations.
+
+  Field                         Behaviour
+  ────────────────────────────  ────────────────────────────────────────────────────
+  Customer Inter-Ply Thickness  Overrides fabric_rate_master.thickness_mm.
+                                Entered when customer specifies their own inter-ply
+                                rubber thickness requirement.
+
+  Customer Carcass Thickness    Overrides fabric_strength_master carcass value.
+                                If present, this value is used in ALL calculations
+                                instead of the master value.
+
+  Customer Total Belt Thickness A hard ceiling constraint. Calculated / actual belt
+  (TBT)                         thickness must NOT exceed this value.
+                                All components (carcass + covers + other layers)
+                                must fit within TBT.
+
+  CONSTRAINT RULES (LOCKED)
+  ──────────────────────────
+  • Customer Inter-Ply Thickness  →  overrides fabric_rate_master default
+  • Customer Carcass Thickness    →  overrides master carcass thickness
+  • Customer TBT                  →  hard ceiling; Σ all components ≤ TBT
+  • When BOTH Customer Carcass Thickness AND Customer TBT are specified:
+      — both apply simultaneously
+      — carcass must equal the customer carcass value
+      — AND total must stay within TBT
+      — remaining thickness budget for covers = TBT − customer_carcass_thk
+      — if covers + carcass > TBT → flag as infeasible
+
+  KEY DISTINCTION — Individual Ply Rating vs. Per Ply Rating
+  ──────────────────────────────────────────────────────────
+  These are two different numbers and must never be confused.
+
+  Individual Ply Rating (Quotation)   Commercial / rounded values used on
+                                      customer-facing documents.
+                                      e.g. 100, 125, 160, 200, 250, 315, 400…
+                                      Source: individual_ply_rating_master
+
+  Per Ply Rating (Actual)             Exact engineering value = total_strength / n_ply
+                                      e.g. NN-315/3 → 315 ÷ 3 = 105.0
+                                      Source: fabric_strength_master.per_ply_rating
+
+  Individual Ply Rating also serves as the LOOKUP KEY into fabric_rate_master
+  to resolve GSM and inter-ply thickness for a given fabric type.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  1.3  SUPPORTING MASTERS — KEY FIELD NOTES
+────────────────────────────────────────────────────────────────────────────────
+
+  FABRIC STRENGTH MASTER  (fabric_strength_master.js)
+  ────────────────────────────────────────────────────
+  Static data — 547 rows across 6 fabric types: NN, EP, EE, EN, PP, SW
+  (plus straight-warp variants).
+
+  Key fields:
+    code                      e.g. "NN-315/3"  (format: type-total_strength/n_ply)
+    fabric_type               NN | EP | EE | EN | PP | SW
+    total_strength            Total belt strength (kN/m)
+    no_of_ply                 Number of fabric plies
+    per_ply_rating            total_strength ÷ no_of_ply (exact, 2 dp)
+    nominal_carcass_thickness_mm   Default carcass thickness for this configuration
+                              null = not yet specified
+
+  FABRIC RATE MASTER  (fabric_rate_master.js)
+  ─────────────────────────────────────────────
+  Two-part structure:
+
+  type_defaults[]             Fallback ₹/kg by fabric type.
+                              Used when no specific grade row is found.
+
+  grades[]                    Per-ply-rating grade rows.
+    Lookup key: fabric_type + per_ply_rating
+    Key fields:
+      gsm           Fabric weight per ply (g/m²) — used in weight calculation
+      thickness_mm  Single-ply thickness (mm) — used as inter-ply thickness default
+      price_per_kg  Purchase price in ₹/kg
+
+  FABRIC SUPPLIER MASTER  (fabric_supplier_master.js)
+  ─────────────────────────────────────────────────────
+  Links supplier + fabric make + fabric type + ply rating together.
+  Key fields:
+    supplier_id               FK to supplier_master
+    fabric_make               { make, short_form } — e.g. { "Wuhu China", "WH" }
+    fabric_type               NN | EP | EE…
+    supplier_material_code    Supplier's own code for this fabric
+    internal_material_code    Ravasco's internal code — shown as "Fabric Code"
+    ply_rating                Individual ply rating (commercial value)
+    specifications[]          { description, gsm, thickness_mm } — snapshotted
+
+  BELT RATING MASTER  (belt_rating_master.js)
+  ────────────────────────────────────────────
+  CRUD master for belt rating combinations.
+  Code format: {fabric_type}-{per_ply_rating}-{no_of_plies}  e.g. NN-315-3
+  Key calculated field: total_rating = per_ply_rating × no_of_plies
+
+  COVER THICKNESS MASTER  (cover_thickness_master.js)
+  ─────────────────────────────────────────────────────
+  Role-based. Values are filtered by role when presented in the costing form:
+    role = TOP_COVER     →  shown in Top Cover dropdown
+    role = BOTTOM_COVER  →  shown in Bottom Cover dropdown
+
+  BREAKER MASTER  (breaker_master.js)
+  ─────────────────────────────────────
+  Role-based. Values are filtered by role:
+    role = BREAKER_TOP     →  shown when Breaker on Top = Yes
+    role = BREAKER_BOTTOM  →  shown when Breaker on Bottom = Yes
+  Supports 1 Ply or 2 Ply, Floating or Non-Floating configurations.
+
+  COMPOUND MASTER  (compound_master.js)
+  ──────────────────────────────────────
+  Rubber compounds with SG and pricing.
+  Each compound has a roles[] array (e.g. TOP_COVER, BOTTOM_COVER, SKIM).
+  The costing form filters compounds by role when populating dropdowns.
+
+  GRADE MASTER  (grade_master.js)
+  ─────────────────────────────────
+  Three-grade system — see Section 2.5 for full detail.
+
+
+================================================================================
+  SECTION 2 — COSTING FORM STRUCTURE
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+  2.1  HEADER INPUTS & FIELD SOURCES
+────────────────────────────────────────────────────────────────────────────────
+
+  Field                   Source Master              Notes
+  ──────────────────────  ─────────────────────────  ──────────────────────────────
+  Width                   width_master               Dropdown from master
+  Make of Fabric          supplier_master            Dropdown: fabric manufacturer
+  Rating Display          fabric_strength_master     Belt strength code (e.g. NN-315/3)
+  (Belt Strength)
+  No of Ply               Fixed list 1–8             Simple numeric dropdown.
+                                                     No separate master required.
+  Top Cover Thickness     cover_thickness_master     Filtered by role = TOP_COVER
+  Bottom Cover Thickness  cover_thickness_master     Filtered by role = BOTTOM_COVER
+  Total Belt Thickness    Calculated                 See Section 2.2 (4 scenarios)
+  Breaker on Top          User yes/no                If Yes → breaker_master
+                          → breaker_master            role = BREAKER_TOP
+  Breaker on Bottom       User yes/no                If Yes → breaker_master
+                          → breaker_master            role = BREAKER_BOTTOM
+  Grade                   grade_master               See Section 2.5
+  Roll Length             User input
+  No of Rolls             User input
+  Total Quantity          Calculated = Roll × Rolls
+
+
+────────────────────────────────────────────────────────────────────────────────
+  2.2  FOUR CARCASS / TOTAL BELT THICKNESS SCENARIOS
+────────────────────────────────────────────────────────────────────────────────
+
+  These four scenarios are mutually exclusive. Exactly one is active per costing
+  line. The active scenario determines both carcass_thk and total_belt_thk.
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  SCENARIO 1 — No Customer Override (Master Values)                          │
+  │  ─────────────────────────────────────────────────                          │
+  │  inter_ply_thk  =  As Per Fabric Rating Master                              │
+  │  carcass_thk    =  As Per Fabric Rating Master                              │
+  │  total_belt_thk =  carcass_thk + top_cover_thk + bottom_cover_thk          │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  SCENARIO 2 — Customer Specifies Inter-Ply Thickness                        │
+  │  ──────────────────────────────────────────────────                         │
+  │  customer_inter_ply_thk  =  [entered by user]                               │
+  │                                                                              │
+  │  carcass_thk = master_carcass_thk                                           │
+  │              + (n_ply − 1) × (customer_inter_ply_thk − master_inter_ply_thk)│
+  │                                                                              │
+  │  total_belt_thk = carcass_thk + top_cover_thk + bottom_cover_thk           │
+  │                                                                              │
+  │  WHY (n_ply − 1):                                                           │
+  │    n plies of fabric create (n − 1) inter-ply rubber gaps.                  │
+  │    Each gap grows by the delta between customer and master inter-ply value.  │
+  │    Carcass thickness grows by (n_ply − 1) × delta.                          │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  SCENARIO 3 — Customer Specifies Carcass Thickness Directly                 │
+  │  ──────────────────────────────────────────────────────────                 │
+  │  carcass_thk    =  customer_carcass_thk   (direct override)                 │
+  │  total_belt_thk =  carcass_thk + top_cover_thk + bottom_cover_thk          │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  SCENARIO 4 — Customer Specifies Total Belt Thickness (TBT)                 │
+  │  ──────────────────────────────────────────────────────────                 │
+  │  total_belt_thk =  customer_TBT   (hard ceiling — cannot be exceeded)       │
+  │  carcass_thk    =  customer_TBT − top_cover_thk − bottom_cover_thk         │
+  │                                                                              │
+  │  CONSTRAINT:                                                                 │
+  │    If customer specifies BOTH carcass_thk (Scenario 3) AND TBT (Scenario 4) │
+  │    simultaneously, both constraints apply:                                   │
+  │      • carcass must equal the customer carcass value                         │
+  │      • total must still stay within TBT                                      │
+  │      • If carcass + top + bottom > TBT → flag as infeasible                 │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  TOTAL BELT THICKNESS — SUMMARY TABLE
+
+  Scenario                           TBT formula
+  ─────────────────────────────────  ──────────────────────────────────────────
+  1 — Master values                  master_carcass  + top + bottom
+  2 — Customer inter-ply thickness   adjusted_carcass + top + bottom
+  3 — Customer carcass thickness     customer_carcass + top + bottom
+  4 — Customer TBT                   customer_TBT (direct)
+
+
+────────────────────────────────────────────────────────────────────────────────
+  2.3  COVER INPUTS
+────────────────────────────────────────────────────────────────────────────────
+
+  Top Cover and Bottom Cover are two fully independent fields.
+  Both come from cover_thickness_master, filtered by role.
+  See Section 3.4 for the full locked architecture of cover calculation.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  2.4  BREAKER INPUTS
+────────────────────────────────────────────────────────────────────────────────
+
+  Breaker on Top    User selects Yes / No
+    If Yes →  Ply count:   1 Ply  or  2 Ply
+              Float type:  Floating  or  Non-Floating
+              Data source: breaker_master  (role = BREAKER_TOP)
+
+  Breaker on Bottom  User selects Yes / No
+    If Yes →  Ply count:   1 Ply  or  2 Ply
+              Float type:  Floating  or  Non-Floating
+              Data source: breaker_master  (role = BREAKER_BOTTOM)
+
+  Note: Breakers are NOT part of the sandwich approximation used in skim
+  calculation (see Section 3.6). They are added to total_belt_weight AFTER
+  the sandwich subtraction.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  2.5  GRADE SYSTEM — THREE INDEPENDENT GRADES
+────────────────────────────────────────────────────────────────────────────────
+
+  Every compound selection in the costing form involves three parallel grade
+  designations. These are always independent — never merged or derived from
+  each other.
+
+  Grade Type        Source Master        Purpose
+  ────────────────  ───────────────────  ────────────────────────────────────────
+  Indus Grade       Indus Grade Master   IS standard designation
+                                         e.g. IS-M24
+                                         Display only — on quotation documents
+
+  Customer Grade    Client Master        What the customer calls this grade
+                                         e.g. M-24
+                                         Display only — on quotation documents
+
+  Costing Grade     Costing Grade Master The ACTUAL compound used internally
+                                         e.g. R7030
+                                         DRIVES all calculations:
+                                           — SG lookup
+                                           — ₹/kg lookup
+                                           — weight computation
+                                           — cost computation
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  RULE: Costing Grade is the only grade that matters for calculations.        │
+  │  Indus Grade and Customer Grade are purely for document display.             │
+  │  They must be stored and shown on PDFs, but the engine never reads them.     │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────────
+  2.6  QUANTITY INPUTS
+────────────────────────────────────────────────────────────────────────────────
+
+  Roll Length       User input (metres)
+  No of Rolls       User input
+  Total Quantity  = Roll Length × No of Rolls   (calculated, displayed)
+
+  The effective length used in weight calculations includes wastage on top of
+  Roll Length — see Section 3.2 for wastage rules by fabric type.
+
+
+================================================================================
+  SECTION 3 — COSTING ENGINE — CALCULATION RULES
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+  3.1  TWO FORMULA FAMILIES  (LOCKED)
+────────────────────────────────────────────────────────────────────────────────
+
+  Every layer in the belt belongs to exactly one of two formula families.
+  Never mix the two formulas for the same layer.
+
+  ══════════════════════════════════════════════════════════════════════════════
+  FAMILY 1 — RUBBER LAYERS  (SG-based)
+  ══════════════════════════════════════════════════════════════════════════════
+
+    layer_weight (kg) = W_eff (m)  ×  thickness (mm)  ×  SG (g/cm³)  ×  L_eff (m)
+
+    Unit check: m × mm × g/cm³ × m  →  kg   (conversion factor = 1 in these units)
+
+    SG comes from compound_master per compound code.
+    Each rubber layer is an INDEPENDENT declaration.
+    SG values from different layers are NEVER added or averaged.
+
+    Applies to:  Top cover, Bottom cover, Fabric skim, Breaker skims,
+                 Sidewall, Cleat, Blinker / Edge
+
+  ══════════════════════════════════════════════════════════════════════════════
+  FAMILY 2 — TEXTILE LAYERS  (GSM-based, NO SG)
+  ══════════════════════════════════════════════════════════════════════════════
+
+    layer_weight (kg) = W_eff (m)  ×  (GSM ÷ 1000)  ×  n_layers  ×  L_eff (m)
+
+    WHY NO SG:
+      GSM (grams per square metre) already encodes mass-per-area directly.
+      The fabric's thickness and density are baked into the GSM specification
+      by the fabric supplier. Using SG on top would double-count the mass.
+      GSM ÷ 1000 converts directly to kg/m² — no density lookup needed.
+
+    Applies to:  Carcass fabric (n plies), Breaker fabric (top), Breaker fabric (bottom)
+
+
+────────────────────────────────────────────────────────────────────────────────
+  3.2  EFFECTIVE WIDTH & EFFECTIVE LENGTH
+────────────────────────────────────────────────────────────────────────────────
+
+  EFFECTIVE WIDTH
+  ───────────────
+  W_eff = Belt Width  +  3 cm  (fixed wastage — always, regardless of fabric type)
+
+  The 3 cm is a flat addition, not a percentage.
+
+  EFFECTIVE LENGTH  (wastage by fabric type)
+  ──────────────────────────────────────────
+  Wastage is applied to Roll Length when calculating total material needed for
+  an order. It accounts for fabric roll end trim, splicing loss, and handling.
+
+  Fabric Type    Wastage     L_eff formula
+  ───────────    ─────────   ────────────────────────────────
+  NN             + 4 %       L_eff = Roll Length × 1.04
+  PP             + 4 %       L_eff = Roll Length × 1.04
+  EP             + 3 %       L_eff = Roll Length × 1.03
+  EE             + 3 %       L_eff = Roll Length × 1.03
+  SW             TBC         Values not yet confirmed
+  Other types    TBC         Values not yet confirmed
+
+
+────────────────────────────────────────────────────────────────────────────────
+  3.3  FULL LAYER INVENTORY
+────────────────────────────────────────────────────────────────────────────────
+
+  RUBBER LAYERS  (Formula Family 1 — SG × thickness)
+  ────────────────────────────────────────────────────
+  Layer               Role Code              Notes
+  ──────────────────  ─────────────────────  ──────────────────────────────────
+  Top cover           TOP_COVER              Wear surface facing the load
+  Bottom cover        BOTTOM_COVER           Pulley-side surface
+  Fabric skim         SKIM (FABRIC)          Thin rubber between every pair of
+                                             fabric plies — bonds them together
+  Breaker 1 skim      SKIM (BREAKER)         Rubber on top breaker (if BOT = Yes)
+  Breaker 2 skim      SKIM                   Rubber on bottom breaker (if BOB = Yes)
+  Sidewall            SIDEWALL               Edge rubber — sidewall belts only
+                                             NOTE: +10% wastage on sidewall
+  Cleat               CLEAT                  Raised cleats — chevron/cleated belts
+                                             NOTE: +10% wastage on cleat
+  Blinker / Edge      BLINKER, EDGE          Edge rubber — moulded-edge belts
+
+  TEXTILE LAYERS  (Formula Family 2 — GSM-based)
+  ────────────────────────────────────────────────
+  Layer                      Source Master
+  ─────────────────────────  ─────────────────────────────────────────────────
+  Carcass fabric (n plies)   fabric_rating_master
+  Breaker fabric — top       breaker_master  (if Breaker on Top = Yes)
+  Breaker fabric — bottom    breaker_master  (if Breaker on Bottom = Yes)
+
+  NON-MASS COST COMPONENTS  (cost only — no weight contribution to belt)
+  ────────────────────────────────────────────────────────────────────────
+  Component            How costed
+  ───────────────────  ──────────────────────────────────────────────────────
+  Solution (adhesive)  weight × ₹/kg
+  Hardener             10% of solution weight × ₹/kg
+  Reel / packing       Flat ₹/m or ₹/reel  (from reel_packing_master)
+  Freight              ₹/kg  (from freight_master — state or customer override)
+  COP                  ₹/kg  (from belt_type_master) × total belt weight
+
+
+────────────────────────────────────────────────────────────────────────────────
+  3.4  COVER CALCULATION — TWO-COMPONENT MODEL  (LOCKED)
+────────────────────────────────────────────────────────────────────────────────
+
+  FORMULA (per cover, calculated independently)
+  ─────────────────────────────────────────────
+    cover_weight (kg) = W_eff × thickness (mm) × SG × L_eff
+    cover_cost   (₹)  = cover_weight × price_per_kg
+
+  WHY TOP AND BOTTOM ARE ALWAYS INDEPENDENT
+  ──────────────────────────────────────────
+  Different top and bottom compounds is a NORMAL customer requirement, not an
+  edge case. Real-world scenarios:
+
+    1. Cost optimisation    — premium grade top (wear face), cheaper bottom
+    2. Functional           — fire-resistant top, general-purpose bottom (mining)
+    3. Heat resistance      — heat-resistant top, GP bottom (hot material)
+    4. Asymmetric thickness — same compound, different mm (most common case)
+
+  All four scenarios are handled identically by the two-component model.
+
+  FORM LAYER — TWO FULLY INDEPENDENT FIELDS
+  ──────────────────────────────────────────
+    TOP COVER
+      Compound dropdown  →  filtered to roles contains TOP_COVER
+      Thickness input    →  mm
+      SG                 →  auto-displayed from compound_master (read only)
+      ₹/kg               →  auto-displayed from compound_master (read only)
+
+    BOTTOM COVER
+      Compound dropdown  →  filtered to roles contains BOTTOM_COVER
+      Thickness input    →  mm
+      SG                 →  auto-displayed from compound_master (read only)
+      ₹/kg               →  auto-displayed from compound_master (read only)
+
+    Rules:
+      • No cascading between top and bottom fields
+      • No "use same as top" shortcut — ambiguous in audit trail
+      • Pre-populating bottom with top's last selection is allowed as a
+        UI convenience ONLY — bottom always remains independently editable
+        and independently snapshotted
+
+  ENGINE LAYER — TWO INDEPENDENT COMPONENT DECLARATIONS
+  ───────────────────────────────────────────────────────
+    components: [
+      { id: 'top_cover',    role: 'TOP_COVER',    formula: 'rubber_layer' },
+      { id: 'bottom_cover', role: 'BOTTOM_COVER', formula: 'rubber_layer' },
+    ]
+    Each runs the rubber_layer formula with its own inputs. They never share data.
+
+  QUOTATION LINE STORAGE — SEPARATE COLUMNS PER COVER
+  ─────────────────────────────────────────────────────
+    top_cover_compound_code        — FK to compound_master
+    top_cover_thickness_mm
+    top_cover_sg_snapshot          ← frozen at quote send time
+    top_cover_price_snapshot       ← frozen at quote send time
+    top_cover_weight_kg
+    top_cover_cost_inr
+
+    bottom_cover_compound_code
+    bottom_cover_thickness_mm
+    bottom_cover_sg_snapshot       ← frozen at quote send time
+    bottom_cover_price_snapshot    ← frozen at quote send time
+    bottom_cover_weight_kg
+    bottom_cover_cost_inr
+
+  DISPLAY / PDF — ALWAYS SHOW BOTH ROWS
+  ──────────────────────────────────────
+    Cover (Top)     [compound]   [mm]    [kg]    [₹/kg]   [₹]
+    Cover (Bottom)  [compound]   [mm]    [kg]    [₹/kg]   [₹]
+                                         ─────            ─────
+    Total Cover                          [kg]             [₹]
+
+    NEVER collapse to a single "Cover" line. Two rows always required.
+    Reason: cost audit, quarterly rate comparison, customer queries.
+
+  VALIDATION
+  ──────────
+    • Warn (do NOT block) if compound role doesn't include TOP_COVER / BOTTOM_COVER
+    • Validate each cover thickness independently against customer TBT constraint
+    • Reporting must support:
+        "all quotes using compound X on top"
+        "all quotes using compound Y on bottom"
+
+  WHAT NOT TO DO  (will cause bugs)
+  ───────────────────────────────────
+    ❌  Single "Cover" field with one compound picker
+    ❌  "Same as top" checkbox on bottom field
+    ❌  Average cover SG  or  average cover ₹/kg
+    ❌  One cover_compound_code column + asymmetric flag
+    ❌  One combined cover weight, then split for cost
+
+
+────────────────────────────────────────────────────────────────────────────────
+  3.5  FABRIC / CARCASS WEIGHT
+────────────────────────────────────────────────────────────────────────────────
+
+  Formula (Family 2 — GSM-based):
+    fabric_wt (kg) = W_eff (m)  ×  (GSM ÷ 1000)  ×  n_ply  ×  L_eff (m)
+
+  GSM source:    fabric_rate_master.grades.gsm
+                 Lookup key: fabric_type + individual_ply_rating
+
+  ₹/kg source:   fabric_rate_master.grades.price_per_kg  (same lookup)
+
+  No SG involved. GSM already encodes mass-per-area. SG would double-count.
+
+  SAME APPLIES TO BREAKER FABRIC:
+    breaker_fabric_wt = W_eff  ×  (breaker_GSM ÷ 1000)  ×  n_breaker_layers  ×  L_eff
+    GSM source: breaker_master
+
+
+────────────────────────────────────────────────────────────────────────────────
+  3.6  SKIM CALCULATION — REMAINDER METHOD  (LOCKED)
+────────────────────────────────────────────────────────────────────────────────
+
+  DECISION: Remainder method preserved (legacy formula, fully locked).
+  ─────────────────────────────────────────────────────────────────────
+  Reason 1: Oracle validation numbers were produced this way.
+  Reason 2: Direct method (W × skim_thk × SG_skim × L) needs skim_thickness_mm
+            which does not exist in master data today.
+  Reason 3: A hybrid approach would introduce branching — violates the
+            one universal engine rule.
+
+  !! CRITICAL NAMING WARNING !!
+  ───────────────────────────────────────────────────────────────────────────────
+  The mind map labels one intermediate value "Total Belt Weight."
+  This is NOT the actual total belt weight. They are two different numbers.
+
+  Mind map term          Engine variable name          What it actually is
+  ─────────────────────  ────────────────────────────  ──────────────────────────────
+  "Total Belt Weight"    belt_wt_without_breaker       SANDWICH APPROXIMATION:
+                                                        belt modelled as single slab
+                                                        of cover compound
+  Final reported figure  total_belt_weight             Actual physical sum of all
+                                                        components
+
+  Using the wrong name in code will cause bugs. Always use belt_wt_without_breaker
+  for the intermediate sandwich value.
+
+  THE FOUR-STEP CALCULATION
+  ──────────────────────────
+
+  Step 1 — Sandwich approximation  (uses cover SG, NOT skim SG)
+  ─────────────────────────────────────────────────────────────
+    belt_wt_without_breaker = W_eff  ×  (carcass_thk + top_thk + bottom_thk)
+                                     ×  cover_SG
+                                     ×  L_eff
+
+    The active carcass_thk (from whichever of the 4 scenarios applies) is used here.
+
+  Step 2 — Independent component weights  (already known)
+  ────────────────────────────────────────────────────────
+    top_cover_wt    = W_eff  ×  top_thk    ×  SG_top    ×  L_eff
+    bottom_cover_wt = W_eff  ×  bottom_thk ×  SG_bottom ×  L_eff
+    fabric_wt       = W_eff  ×  (GSM÷1000) ×  n_ply     ×  L_eff
+
+  Step 3 — Skim is the residual  (SG_skim is NEVER used in weight)
+  ─────────────────────────────────────────────────────────────────
+    skim_wt = belt_wt_without_breaker
+            − top_cover_wt
+            − bottom_cover_wt
+            − fabric_wt
+
+    SG_skim does NOT appear anywhere in the skim weight calculation.
+    SG_skim only appears in skim COST via compound_master.price_per_kg.
+
+  Step 4 — Add breakers to get actual total belt weight
+  ──────────────────────────────────────────────────────
+    total_belt_weight = belt_wt_without_breaker
+                      + breaker_fabric_wt        (if BOT or BOB = Yes)
+                      + breaker_skim_wt          (if BOT or BOB = Yes)
+                      + sidewall_wt              (if sidewall belt)
+                      + cleat_wt                 (if chevron/cleated belt)
+                      + …
+
+  OPEN QUESTION — DIFFERENT SGs ON TOP AND BOTTOM COVERS
+  ─────────────────────────────────────────────────────────
+  When top and bottom covers use different compounds (different SGs), the
+  sandwich approximation in Step 1 uses a single cover_SG. It is not yet
+  confirmed which value to use:
+    • Top cover SG?
+    • An average?
+    • Top cover SG always (as the primary wear surface)?
+  *** MUST BE CONFIRMED BEFORE ENGINE IMPLEMENTATION ***
+
+
+────────────────────────────────────────────────────────────────────────────────
+  3.7  TOTAL BELT WEIGHT EQUATION
+────────────────────────────────────────────────────────────────────────────────
+
+  total_belt_weight =
+      Σ rubber_layer_wt   (W_eff × t × SG × L_eff)       per compound layer
+    + Σ textile_layer_wt  (W_eff × GSM/1000 × n × L_eff) per fabric/breaker layer
+    + Σ component_wt      (sidewall, cleat, solution, hardener — geometry-based)
+
+  Width wastage:   Fixed +3 cm (flat addition, always)
+  Length wastage:  By fabric type percentage (see Section 3.2)
+  Result unit:     kg  (total for the order batch)
+
+
+────────────────────────────────────────────────────────────────────────────────
+  3.8  NON-MASS COST COMPONENTS
+────────────────────────────────────────────────────────────────────────────────
+
+  These items contribute to cost but NOT to belt weight.
+
+  Solution (adhesive)
+    Cost = solution_weight × solution_price_per_kg
+
+  Hardener
+    Quantity = 10% of solution weight
+    Cost = (solution_weight × 0.10) × hardener_price_per_kg
+
+  Reel / Packing
+    Source: reel_packing_master
+    Costed as: flat ₹/metre  OR  flat ₹/reel  (depends on master record type)
+
+  Freight
+    Source: freight_master
+    Rate: ₹/kg  ×  total belt weight
+    Override: customer-specific or state-specific rate can override default
+
+  COP (Cost of Production)
+    Source: belt_type_master.cop_rate_per_kg
+    Cost = cop_rate_per_kg × total_belt_weight
+    Covers manufacturing overhead, labour, utilities, etc.
+
+
+================================================================================
+  SECTION 4 — LOCKED ARCHITECTURAL RULES
+================================================================================
+
+  The following rules have been explicitly confirmed and locked. They must not
+  be changed without a deliberate design decision and re-documentation.
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  RULE 1 — SG IS PER-LAYER, NEVER COMBINED                                   │
+  │                                                                              │
+  │  SG is a density (g/cm³) — a property of a specific material.               │
+  │  It is physically impossible to add or average densities of different        │
+  │  materials to get a meaningful combined density.                             │
+  │                                                                              │
+  │  Two compounds = two SG lookups = two weight calculations = two kg values   │
+  │  that are then added together.                                               │
+  │                                                                              │
+  │  ❌  combined_SG = SG_top + SG_bottom                                        │
+  │  ❌  avg_SG      = (SG_top + SG_bottom) / 2                                  │
+  │  ✓   total_wt   = top_cover_wt + bottom_cover_wt   (kg + kg = kg)           │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  RULE 2 — TOP AND BOTTOM COVERS ARE ALWAYS TWO INDEPENDENT COMPONENTS       │
+  │                                                                              │
+  │  Even when 95% of belts use the same compound on both sides, the form       │
+  │  always shows two separate fields, the engine always runs two separate       │
+  │  calculations, and storage always holds two separate rows.                   │
+  │                                                                              │
+  │  There is no "same as top" shortcut. There is no blending.                  │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  RULE 3 — SKIM WEIGHT IS DERIVED BY SUBTRACTION (REMAINDER METHOD)          │
+  │                                                                              │
+  │  skim_wt = belt_wt_without_breaker − fabric_wt − top_cover_wt               │
+  │                                     − bottom_cover_wt                       │
+  │                                                                              │
+  │  SG_skim does NOT appear in skim weight. It only appears in skim cost.      │
+  │  The intermediate value belt_wt_without_breaker is NOT the same as          │
+  │  total_belt_weight. They must never be named the same thing in code.        │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  RULE 4 — ONE UNIVERSAL ENGINE, NO PER-BELT-TYPE BRANCHING                  │
+  │                                                                              │
+  │  There is no  if (belt_type === 'chevron') { ... }  anywhere in the engine. │
+  │                                                                              │
+  │  belt_type_master declares the component set for each belt type.            │
+  │  The engine loops over the declared components only.                         │
+  │                                                                              │
+  │  Belt Type        Additional components vs. base multiply belt              │
+  │  ───────────────  ──────────────────────────────────────────────            │
+  │  Multiply fabric  covers + carcass + fabric skim (+ breakers if used)      │
+  │  Chevron          above + cleats  (+10% wastage on cleat)                  │
+  │  Sidewall         above + sidewall  (+10% wastage on sidewall) + cleats    │
+  │  Steep angle      full set                                                  │
+  │  Bucket elevator  TBC                                                       │
+  │  Straight warp    carcass handling TBC                                      │
+  │                                                                              │
+  │  WHY: The prior X5 architecture used per-type branching. This caused        │
+  │  silent miscalculations when new belt types were added. The component        │
+  │  declaration model in belt_type_master is the fix.                          │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  RULE 5 — COSTING GRADE DRIVES CALCULATIONS; INDUS AND CUSTOMER GRADES      │
+  │           ARE DISPLAY-ONLY                                                   │
+  │                                                                              │
+  │  Indus Grade   →  IS standard designation  →  quotation document only       │
+  │  Customer Grade →  what the customer calls it  →  quotation document only   │
+  │  Costing Grade  →  actual internal compound  →  SG, ₹/kg, all calculations  │
+  │                                                                              │
+  │  The engine only reads Costing Grade. It never reads Indus or Customer.     │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  RULE 6 — GSM-BASED FORMULA FOR ALL TEXTILE LAYERS (NO SG)                  │
+  │                                                                              │
+  │  Fabric (carcass and breaker) uses GSM ÷ 1000 to get kg/m².                 │
+  │  SG is never applied to textile layers. GSM already encodes the mass.       │
+  │  Applying SG to a textile layer would double-count the mass.                │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  RULE 7 — WIDTH WASTAGE IS FLAT +3 CM; LENGTH WASTAGE IS TYPE-DEPENDENT %   │
+  │                                                                              │
+  │  Width:  always add 3 cm flat (never a percentage)                          │
+  │  Length: NN/PP → +4%;   EP/EE → +3%;   SW and others → TBC                 │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  RULE 8 — SNAPSHOTS AT QUOTE SEND                                            │
+  │                                                                              │
+  │  At the moment a quotation is sent, all compound codes, SG values, and      │
+  │  ₹/kg rates are frozen as snapshot columns in the quotation line record.    │
+  │  Future rate changes in master data do not affect sent quotes.               │
+  │                                                                              │
+  │  Minimum snapshot fields per compound layer:                                 │
+  │    compound_code, sg_snapshot, price_per_kg_snapshot,                        │
+  │    weight_kg, cost_inr                                                       │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+  SECTION 5 — DECISIONS MADE & OPEN QUESTIONS
+================================================================================
+
+  RESOLVED DECISIONS
+  ──────────────────
+
+  ┌──────┬────────────────────────────────────────────────────────────────────┐
+  │  D1  │  BELT RATING CODE FORMAT — SLASH FORMAT EVERYWHERE  ✓ LOCKED       │
+  │      │                                                                    │
+  │      │  All belt rating codes use slash format: {type}-{strength}/{ply}   │
+  │      │  e.g. NN-315/3                                                     │
+  │      │                                                                    │
+  │      │  belt_rating_master must be updated to use slash format            │
+  │      │  consistently. fabric_strength_master.code already uses slash.     │
+  │      │  "Select Belt Rating" in Fabric Rating Master pulls from           │
+  │      │  fabric_strength_master codes (slash format is canonical).         │
+  ├──────┼────────────────────────────────────────────────────────────────────┤
+  │  D2  │  COVER COMPOUND GRADE FAMILY MISMATCH WARNING  ✓ LOCKED            │
+  │      │                                                                    │
+  │      │  Show a soft warning message in the UI sidebar when top and        │
+  │      │  bottom compounds are from very different grade families            │
+  │      │  (e.g. FR top + GP bottom).                                        │
+  │      │  The warning is informational only — it does NOT gate or block     │
+  │      │  the user from proceeding. Process always continues.               │
+  ├──────┼────────────────────────────────────────────────────────────────────┤
+  │  D3  │  SW / OTHER FABRIC TYPES — LENGTH WASTAGE %  — DEFERRED           │
+  │      │                                                                    │
+  │      │  Will be defined in a later session.                               │
+  │      │  NN/PP = +4%,  EP/EE = +3%  remain the only confirmed values.     │
+  ├──────┼────────────────────────────────────────────────────────────────────┤
+  │  D4  │  BUCKET ELEVATOR — COMPONENT DECLARATION  — DEFERRED              │
+  │      │                                                                    │
+  │      │  Will be discussed and handled in a later session.                 │
+  ├──────┼────────────────────────────────────────────────────────────────────┤
+  │  D5  │  STRAIGHT WARP — CARCASS HANDLING  — DEFERRED                     │
+  │      │                                                                    │
+  │      │  Will be defined in a later session.                               │
+  └──────┴────────────────────────────────────────────────────────────────────┘
+
+  STILL OPEN — MUST CONFIRM BEFORE ENGINE IMPLEMENTATION
+  ────────────────────────────────────────────────────────
+
+  ┌──────┬────────────────────────────────────────────────────────────────────┐
+  │  Q1  │  SKIM SANDWICH SG — DIFFERENT TOP/BOTTOM COMPOUNDS:               │
+  │      │  When top cover and bottom cover use different compounds           │
+  │      │  (different SGs), which SG is used in the sandwich approximation  │
+  │      │  belt_wt_without_breaker? Top cover SG? An average? Always top?   │
+  │      │  *** MUST CONFIRM BEFORE ENGINE IMPLEMENTATION ***                │
+  └──────┴────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+  DATA SOURCES — QUICK REFERENCE
+================================================================================
+
+  What you need              Where to get it
+  ─────────────────────────  ──────────────────────────────────────────────────
+  Belt width options         width_master
+  Roll length options        length_master
+  Fabric manufacturer        supplier_master
+  Fabric type codes          fabric_type_master
+  Belt strength / n_ply      fabric_strength_master
+    (+ carcass thickness,    .code, .fabric_type, .total_strength,
+     per_ply_rating)         .no_of_ply, .per_ply_rating,
+                             .nominal_carcass_thickness_mm
+  GSM per ply rating         fabric_rate_master.grades.gsm
+  Inter-ply thickness        fabric_rate_master.grades.thickness_mm
+  Fabric ₹/kg                fabric_rate_master.grades.price_per_kg
+  Fabric type default ₹/kg   fabric_rate_master.type_defaults
+  Supplier's fabric codes    fabric_supplier_master
+    (internal_material_code, .internal_material_code
+     fabric_make, ply_rating) .fabric_make, .ply_rating
+  Cover thickness options    cover_thickness_master  (filtered by role)
+  Compound SG                compound_master.sg
+  Compound ₹/kg              compound_master.price_per_kg
+  Compound roles             compound_master.roles[]
+  Grade (Indus)              grade_master (Indus Grade Master)
+  Grade (Customer)           grade_master (Client Master)
+  Grade (Costing)            grade_master (Costing Grade Master)
+  Belt type component set    belt_type_master.components[]
+  Belt type COP rate         belt_type_master.cop_rate_per_kg
+  Breaker options            breaker_master  (filtered by role)
+  Reel/packing cost          reel_packing_master
+  Freight rate               freight_master
+  Customer details           customer_master
+
+
+================================================================================
+  END OF SPECIFICATION
+================================================================================
