@@ -20,7 +20,7 @@ import { COVER_SKIM_COMPATIBILITY }   from '../masters/compound_master.js';
 import { COVER_THICKNESS_MASTER }     from '../masters/cover_thickness_master.js';
 import { getWidthOptions, findWidth } from '../masters/width_master.js';
 import { GP_MASTER }                  from '../masters/gp_master.js';
-import { getAllCurrencies, initCurrencyDefaults } from '../masters/currency_master.js';
+
 import { getAllCustomers, getAllCustomerLocations, parseOptionKey, getCustomer } from '../masters/customer_master.js';
 import { mountCombobox }    from '../lib/dropdown.js';
 import { openPrintWindow }  from '../lib/print_pdf.js';
@@ -681,19 +681,6 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
               <span style="font-size:14px;line-height:1.2">⚠</span>
               <span>GP% is below the minimum of <strong>20%</strong>. This has been overridden with approval.</span>
             </div>
-            <div class="cf-row">
-              <div class="cf-label">Currency</div>
-              <div class="cf-input"><select name="currency_id" ${ro}></select></div>
-            </div>
-            <div class="cf-row">
-              <div class="cf-label">Exchange Rate <span id="cf-exrate-unit" class="cf-unit">₹ / unit</span></div>
-              <div class="cf-input cf-input-inline">
-                <input type="number" name="exchange_rate" step="0.0001" min="0"
-                       value="${line.exchange_rate ?? 1}" ${ro}>
-                <span class="cf-unit">₹</span>
-              </div>
-            </div>
-
             <div class="cf-divider"></div>
 
             <div class="qf-sub-h">Discount</div>
@@ -930,21 +917,6 @@ function buildFormHTML({ quotation, isRevise, isView, line, customers, enquiries
               <tr><td>Floor Price / mm</td><td colspan="2" id="rp-permm-prequote">—</td></tr>
               <tr><td>RMC with GP / m</td><td colspan="2" id="rp-rmc-with-gp">—</td></tr>
               <tr class="ro-subtotal"><td>Floor Price / m</td><td colspan="2" id="rp-min-quoting">—</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <!-- Block 5 — FX / USD Pricing (conditional) -->
-        <div class="ro-block" id="ro-fx-block" style="display:none">
-          <div class="ro-block-hd">FX / USD Pricing</div>
-          <table class="ro-table">
-            <thead><tr><th>Item</th><th colspan="2">Value</th></tr></thead>
-            <tbody>
-              <tr><td>Exchange Rate</td><td colspan="2" id="rfx-rate">—</td></tr>
-              <tr><td>Min Quoting Price / m (USD)</td><td colspan="2" id="rfx-rmc-usd">—</td></tr>
-              <tr><td>Standard Quotation Rate / m (USD)</td><td colspan="2" id="rfx-cd-usd">—</td></tr>
-              <tr><td>VD Quotation Rate / m (USD)</td><td colspan="2" id="rfx-vd-usd">—</td></tr>
-              <tr class="ro-total"><td><strong>Total Order Value (USD)</strong></td><td colspan="2" id="rfx-total-usd">—</td></tr>
             </tbody>
           </table>
         </div>
@@ -1195,13 +1167,6 @@ function populateAllDropdowns(container, line) {
 
   pop(container, '[name="freight_id"]', _FREIGHT.filter(r => r.active !== false), 'id', 'state_name', _commercial.freight_id);
 
-  // Currency — default to INR
-  initCurrencyDefaults();
-  const currencies = getAllCurrencies().map(c => ({ ...c, _label: `${c.code} — ${c.name}` }));
-  const inrId = currencies.find(c => c.code === 'INR')?.id ?? null;
-  const selCurrencyId = line.currency_id ?? inrId;
-  pop(container, '[name="currency_id"]', currencies, 'id', '_label', selCurrencyId);
-  _updateExchangeRateUnit(container, currencies, selCurrencyId);
 
   updateDerivedDisplays(container, line);
   updateBeltRating(container);
@@ -1265,15 +1230,6 @@ function pop(container, sel, master, valueField, labelField, selected, includeBl
     if (String(row[valueField]) === String(selected)) o.selected = true;
     el.appendChild(o);
   });
-}
-
-// ─── Currency unit label helper ───────────────────────────────────────────────
-
-function _updateExchangeRateUnit(container, currencies, selectedId) {
-  const cur   = currencies.find(c => c.id === selectedId);
-  const label = cur ? `₹ / ${cur.code}` : '₹ / unit';
-  const el    = container.querySelector('#cf-exrate-unit');
-  if (el) el.textContent = label;
 }
 
 // ─── Enquiry description display ──────────────────────────────────────────────
@@ -1714,8 +1670,6 @@ function collectLine(container) {
     edge_id:                      f('edge_id'),
     length_per_roll_m:            fNum('length_per_roll_m'),
     no_of_rolls:                  fNum('no_of_rolls'),
-    currency_id:                  f('currency_id') || null,
-    exchange_rate:                fNum('exchange_rate'),
     gp_pct_direct:                fNum('gp_pct_direct'),
     discount_pct,
     discount_price_type:          f('discount_price_type') ?? 'CD',
@@ -2142,8 +2096,6 @@ function renderResults(container, result) {
   setText(container, '#r-per-mm-running', p.per_mm_running_price_pre_quote != null ? formatRupees(p.per_mm_running_price_pre_quote) + ' / mm' : '—');
   setText(container, '#r-total-rmc-amount', formatRupees(c.total_belt_cost));
   setText(container, '#r-total-rmc-vd',  formatRupees(c.material_cost));
-  setText(container, '#r-rmc-usd',       p.rmc_usd != null ? `$${p.rmc_usd.toFixed(2)} / m` : 'N/A — set exchange rate');
-  setText(container, '#r-cd-usd',        p.quotation_usd != null ? `$${p.quotation_usd.toFixed(2)} / m` : 'N/A — set exchange rate');
   setText(container, '#cc-width',        d.effective_width_m != null ? `${(d.effective_width_m * 1000).toFixed(1)} mm` : '—');
   setText(container, '#cc-length',       d.effective_length_m != null ? d.effective_length_m.toFixed(3) + ' m' : '—');
   setText(container, '#cc-belt-wt',      d.weight_per_meter_kg != null ? formatKg(d.weight_per_meter_kg) + ' / m' : '—');
@@ -2312,22 +2264,6 @@ function renderExtendedResults(container, result) {
   setText(container, '#rp-rmc-with-gp',     fRpm(p.rmc_with_gp_per_m));
   setText(container, '#rp-min-quoting',     fRpm(p.min_quotation_rmc_per_m));
 
-  // ── FX / USD pricing ─────────────────────────────────────────────────────────
-  const fxBlock = container.querySelector('#ro-fx-block');
-  const fxRate = Number(i.exchange_rate) || 0;
-  if (fxBlock) {
-    if (fxRate > 0) {
-      fxBlock.style.display = '';
-      setText(container, '#rfx-rate',       `₹${fxRate.toFixed(2)} / unit`);
-      setText(container, '#rfx-rmc-usd',    p.rmc_usd          != null ? `$${p.rmc_usd.toFixed(2)} / m`          : '—');
-      setText(container, '#rfx-cd-usd',     p.quotation_usd    != null ? `$${p.quotation_usd.toFixed(2)} / m`    : '—');
-      setText(container, '#rfx-vd-usd',     p.quotation_vd_usd != null ? `$${p.quotation_vd_usd.toFixed(2)} / m` : '—');
-      const totalUsd = p.cd_total != null && fxRate > 0 ? p.cd_total / fxRate : null;
-      setText(container, '#rfx-total-usd',  totalUsd != null ? `$${totalUsd.toFixed(2)}` : '—');
-    } else {
-      fxBlock.style.display = 'none';
-    }
-  }
 }
 
 function updateDiscountResults(container, result) {
@@ -2430,7 +2366,6 @@ function renderDetailedFields(container, result) {
     row('COP Rate', i.cop_rate_per_kg != null ? `₹${i.cop_rate_per_kg} / kg` : '—'),
     row('Expense per KG', i.ovr_expenses_per_kg != null ? `₹${i.ovr_expenses_per_kg} / kg` : '—'),
     row('GP %', p.gp_pct_applied != null ? `${(p.gp_pct_applied * 100).toFixed(1)}%` : '—'),
-    row('Exchange Rate', i.exchange_rate ? `₹${i.exchange_rate.toFixed(2)} / USD` : 'N/A'),
 
     hdr('Effective Dimensions & Factors'),
     row('Effective Width (W_eff)', d.effective_width_m != null ? `${d.effective_width_m.toFixed(4)} m` : '—'),
@@ -2486,9 +2421,6 @@ function renderDetailedFields(container, result) {
     row('Discount %', i.discount_pct != null ? `${(i.discount_pct * 100).toFixed(1)}%` : '0%'),
     row('Final Standard / Meter', p.cd_final_per_meter != null ? formatRupees(p.cd_final_per_meter) + ' / m' : '—'),
     row('Final Standard Total', p.cd_final_total != null ? formatRupees(p.cd_final_total) : '—'),
-    row('Min. Quotation Price / m (USD)', p.rmc_usd != null ? `$${p.rmc_usd.toFixed(2)} / m` : 'N/A'),
-    row('Quotation Rate / m USD (Standard)', p.quotation_usd != null ? `$${p.quotation_usd.toFixed(2)} / m` : 'N/A'),
-    row('Quotation Rate / m USD (VD)', p.quotation_vd_usd != null ? `$${p.quotation_vd_usd.toFixed(2)} / m` : 'N/A'),
     row('Total RMC Amount', c.total_belt_cost != null ? formatRupees(c.total_belt_cost) : '—'),
     row('Total Quotation Amount (Standard)', p.cd_total != null ? formatRupees(p.cd_total) : '—'),
     row('Total RMC Cost VD (Material)', c.material_cost != null ? formatRupees(c.material_cost) : '—'),
@@ -2818,21 +2750,6 @@ function setupEvents(container, quotation, isRevise) {
     });
   });
 
-  // Currency change → auto-fill exchange rate from master, update unit label
-  const currencyEl = container.querySelector('[name="currency_id"]');
-  if (currencyEl) {
-    currencyEl.addEventListener('change', () => {
-      const currencies = getAllCurrencies();
-      const cur = currencies.find(c => c.id === currencyEl.value);
-      _updateExchangeRateUnit(container, currencies, currencyEl.value);
-      const rateEl = container.querySelector('[name="exchange_rate"]');
-      if (rateEl && cur?.exchange_rate != null) {
-        rateEl.value = cur.exchange_rate;
-      }
-      recalc(container);
-    });
-  }
-
   // GP% — soft warning + confirmation when user sets below 20%
   const GP_FLOOR = 20;
   const gpInput = container.querySelector('[name="gp_pct_direct"]');
@@ -3120,7 +3037,6 @@ function loadLineIntoForm(container, line, result) {
   setInp('endless_length_m',               line.endless_length_m ?? '');
   setInp('length_per_roll_m',              line.length_per_roll_m ?? '');
   setInp('no_of_rolls',                    line.no_of_rolls ?? '');
-  setInp('exchange_rate',                  line.exchange_rate ?? '');
   setInp('gp_pct_direct',                  line.gp_pct_direct ?? '');
   setInp('discount_pct_input',             line.discount_pct != null ? +(line.discount_pct * 100).toFixed(4) : '');
   setInp('custom_final_price_per_m',       line.custom_final_price_per_m ?? '');

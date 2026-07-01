@@ -251,8 +251,6 @@ export function runEngine(line, overrides = {}) {
   const fabric_plus_brk_cost    = fabric_cost + brk_top_cost + brk_top_sk_cost + brk_bot_cost + brk_bot_sk_cost;
   const total_compound_cost_val = top_cover_cost + bot_cover_cost + skim_cost +
     brk_top_cost + brk_top_sk_cost + brk_bot_cost + brk_bot_sk_cost;
-  const exchange_rate_val = Number(line.exchange_rate) || 0;
-
   const eff_cop_rate   = line.cop_rate_per_kg ?? beltType.cost_of_production_rate_per_kg ?? 0;
   if (!(eff_cop_rate > 0)) {
     warnings.push(`COP rate is 0 — neither line override nor belt type "${beltType.code}" master has a value. Cost of Production will be ₹0.`);
@@ -437,10 +435,6 @@ export function runEngine(line, overrides = {}) {
       min_quotation_rmc_per_m: total_length_m > 0 ? mat_cost * (1 + GP_MASTER.min_gp_pct) / total_length_m : 0,
       per_mm_running_price_pre_quote: width_mm > 0 && total_length_m > 0 ? mat_cost * (1 + GP_MASTER.min_gp_pct) / total_length_m / width_mm : 0,
       freight_rate_used:      freight_rate,
-      quotation_usd:          exchange_rate_val > 0 ? cd_price / exchange_rate_val : null,
-      quotation_vd_usd:       exchange_rate_val > 0 ? vd_price / exchange_rate_val : null,
-      rmc_usd:                exchange_rate_val > 0 ? rmc / exchange_rate_val : null,
-      exchange_rate:          exchange_rate_val,
       rmc_per_kg:             wt_per_m > 0 ? rmc / wt_per_m : 0,
       material_cost_per_m:    total_length_m > 0 ? mat_cost / total_length_m : 0,
       material_cost_per_kg:   wt_per_m > 0 ? (total_length_m > 0 ? mat_cost / total_length_m : 0) / wt_per_m : 0,
